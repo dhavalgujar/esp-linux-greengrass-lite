@@ -1,0 +1,75 @@
+# ESP32-S31 Function-CoreBoard, Ethernet, Greengrass Lite portable core.
+#
+# Espressif's public toolchain and boot stack (as in esp-buildroot-external's
+# espressif_esp32s31_function_core_board_nor_defconfig): musl, busybox init.
+# Greengrass runs as the systemd-free daemon subset. Development profile:
+# root filesystem over NFSv3, see scripts/build.sh.
+
+# Try Buildroot's source mirror first: some packages (glibc) otherwise
+# clone their complete upstream git history.
+BR2_PRIMARY_SITE="https://sources.buildroot.net"
+
+# Architecture and toolchain: identical to the public defconfig.
+BR2_riscv=y
+BR2_riscv_custom=y
+BR2_RISCV_ISA_RVM=y
+BR2_RISCV_ISA_RVA=y
+BR2_RISCV_ISA_RVC=y
+BR2_RISCV_32=y
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://dl.espressif.com/dl/toolchains/preview/riscv64/14.1.1_20260922/riscv64-esp-linux-musl-14.1.1_20260922-$(HOSTARCH)-linux-gnu.tar.xz"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="riscv64-esp-linux-musl"
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_6=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_MUSL=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+
+# System
+BR2_TARGET_GENERIC_HOSTNAME="esp32s31-ggl"
+BR2_TARGET_GENERIC_ISSUE="ESP32-S31 Greengrass Lite (portable core)"
+# BR2_TARGET_GENERIC_GETTY is not set
+BR2_SYSTEM_DHCP=""
+# Hashes for the pinned kernel, U-Boot, OpenSBI and toolchain archives.
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/patches"
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/rootfs_overlay"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ESP_LINUX_BSP_PATH)/board/espressif/esp32s31/post-image.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT_ARGS="nor"
+
+# Boot stack: Espressif's public integration branches, pinned by commit.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/linux/archive/b3bd414d03b8eebb2e44edf08c86058d55e403b3/linux-b3bd414d03b8eebb2e44edf08c86058d55e403b3.tar.gz"
+BR2_LINUX_KERNEL_DEFCONFIG="esp32s31_minimal"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-nfsroot.fragment $(BASE_DIR)/nfsroot-cmdline.fragment"
+BR2_LINUX_KERNEL_IMAGE_TARGET_CUSTOM=y
+BR2_LINUX_KERNEL_IMAGE_TARGET_NAME="xipImage"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="espressif/esp32s31"
+BR2_TARGET_OPENSBI=y
+BR2_TARGET_OPENSBI_CUSTOM_TARBALL=y
+BR2_TARGET_OPENSBI_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/opensbi/archive/5395e03e1cb295257142cfdeaade6334f1543bcb/opensbi-5395e03e1cb295257142cfdeaade6334f1543bcb.tar.gz"
+BR2_TARGET_OPENSBI_PLAT="generic"
+BR2_TARGET_OPENSBI_ADDITIONAL_VARIABLES="PLATFORM_DEFCONFIG=esp32s31_defconfig PLATFORM_RISCV_XLEN=32"
+BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
+BR2_TARGET_UBOOT_CUSTOM_TARBALL=y
+BR2_TARGET_UBOOT_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/u-boot/archive/333c7a31f49d0ecc796edc7b6f7d44c4fcd1e9f8/u-boot-333c7a31f49d0ecc796edc7b6f7d44c4fcd1e9f8.tar.gz"
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="espressif_esp32s31"
+BR2_TARGET_UBOOT_NEEDS_OPENSBI=y
+BR2_TARGET_UBOOT_USE_BINMAN=y
+BR2_TARGET_UBOOT_FORMAT_DTB=y
+BR2_TARGET_UBOOT_FORMAT_ITB=y
+BR2_TARGET_UBOOT_SPL=y
+BR2_TARGET_UBOOT_SPL_NAME="spl/u-boot-spl-dtb.bin"
+BR2_PACKAGE_HOST_ESP_LINUX_BSP=y
+
+# Userspace
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/busybox.fragment"
+BR2_PACKAGE_DROPBEAR=y
+BR2_PACKAGE_LIBCURL_OPENSSL=y
+BR2_PACKAGE_AWS_GREENGRASS_LITE=y
+BR2_PACKAGE_ESP32S31_GGL_HELLO=y
+
+# The root filesystem is exported over NFS; only the boot stack and the XIP
+# kernel go into NOR (the flash packager skips an absent rootfs.cramfs).
+BR2_TARGET_ROOTFS_TAR=y

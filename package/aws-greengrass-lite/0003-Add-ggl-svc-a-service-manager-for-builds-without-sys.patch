@@ -1,0 +1,2402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dhaval Gujar <dhaval.gujar@espressif.com>
+Date: Thu, 29 Oct 2026 04:29:41 +0530
+Subject: [PATCH] Add ggl-svc, a service manager for builds without systemd
+
+ggl-svcd runs the core daemons and the units ggdeploymentd generates for
+components. It implements the subset of systemd unit semantics they use
+(Type, ExecStart, User, Group, WorkingDirectory, Environment, Restart,
+RestartSec, RemainAfterExit, SuccessExitStatus, StartLimitBurst and
+After/Wants/BindsTo ordering), forwards unit output to syslog, and
+exposes unit state over a Unix socket. Readiness of the core daemons is
+the appearance of their core-bus socket (X-GGL-ReadySocket), in place of
+socket activation. Requests that change state are accepted from root
+only.
+
+A systemctl front end forwards the commands ggdeploymentd issues (link,
+enable, disable, start, stop, restart, daemon-reload, reset-failed,
+reboot).
+
+gghealthd gets a matching backend: lifecycle states, restarts,
+systemd-notify style state updates and lifecycle subscriptions come from
+ggl-svcd instead of systemd's D-Bus API, with the same state mapping.
+
+ggipc-auth asks ggl-svcd which unit an IPC peer belongs to (the unit
+whose main process is the peer or one of its ancestors), in place of
+systemd's cgroup-based sd_pid_get_unit(), and derives the component name
+from it exactly as before.
+
+Only built with GGL_PORTABLE_CORE=ON.
+
+Signed-off-by: Dhaval Gujar <dhaval.gujar@espressif.com>
+Upstream: not yet submitted (developed on the esp32s31/v2.7.0 branch of a fork)
+---
+ modules/gghealthd/CMakeLists.txt              |   25 +-
+ modules/gghealthd/src/health.c                |    6 +
+ modules/gghealthd/src/health_portable.c       |  298 +++++
+ modules/gghealthd/src/portable.h              |   26 +
+ modules/gghealthd/src/sd_bus.c                |    6 +
+ modules/gghealthd/src/subscriptions.c         |    6 +
+ .../gghealthd/src/subscriptions_portable.c    |  210 +++
+ modules/ggipc-auth/CMakeLists.txt             |   12 +-
+ modules/ggipc-auth/src/auth.c                 |   17 +
+ modules/ggl-svc/CMakeLists.txt                |   10 +
+ modules/ggl-svc/bin/ggl-svcd.c                | 1136 +++++++++++++++++
+ modules/ggl-svc/bin/systemctl.c               |  120 ++
+ modules/ggl-svc/include/ggl/svc.h             |   39 +
+ modules/ggl-svc/src/client.c                  |  106 ++
+ ...ws.greengrass.TokenExchangeService.service |   13 +
+ .../units/ggl.core.gg-fleet-statusd.service   |   14 +
+ .../ggl-svc/units/ggl.core.ggconfigd.service  |   13 +
+ .../units/ggl.core.ggdeploymentd.service      |   14 +
+ .../ggl-svc/units/ggl.core.gghealthd.service  |   16 +
+ modules/ggl-svc/units/ggl.core.ggipcd.service |   14 +
+ .../ggl-svc/units/ggl.core.ggpubsubd.service  |   14 +
+ .../ggl-svc/units/ggl.core.iotcored.service   |   14 +
+ modules/ggl-svc/units/ggl.core.tesd.service   |   14 +
+ 23 files changed, 2128 insertions(+), 15 deletions(-)
+ create mode 100644 modules/gghealthd/src/health_portable.c
+ create mode 100644 modules/gghealthd/src/portable.h
+ create mode 100644 modules/gghealthd/src/subscriptions_portable.c
+ create mode 100644 modules/ggl-svc/CMakeLists.txt
+ create mode 100644 modules/ggl-svc/bin/ggl-svcd.c
+ create mode 100644 modules/ggl-svc/bin/systemctl.c
+ create mode 100644 modules/ggl-svc/include/ggl/svc.h
+ create mode 100644 modules/ggl-svc/src/client.c
+ create mode 100644 modules/ggl-svc/units/ggl.aws.greengrass.TokenExchangeService.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.gg-fleet-statusd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.ggconfigd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.ggdeploymentd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.gghealthd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.ggipcd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.ggpubsubd.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.iotcored.service
+ create mode 100644 modules/ggl-svc/units/ggl.core.tesd.service
+
+diff --git a/modules/gghealthd/CMakeLists.txt b/modules/gghealthd/CMakeLists.txt
+index 18affcf..ddc7d6e 100644
+--- a/modules/gghealthd/CMakeLists.txt
++++ b/modules/gghealthd/CMakeLists.txt
+@@ -2,14 +2,17 @@
+ # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
+-ggl_init_module(
+-  gghealthd
+-  NO_INLINE_TEST
+-  LIBS gg-sdk
+-       ggl-common
+-       ggl-process
+-       ggl-constants
+-       core-bus
+-       ggl-socket-server
+-       core-bus-gg-config
+-       PkgConfig::libsystemd)
++set(gghealthd_libs
++    gg-sdk
++    ggl-common
++    ggl-process
++    ggl-constants
++    core-bus
++    ggl-socket-server
++    core-bus-gg-config)
++if(GGL_PORTABLE_CORE)
++  list(APPEND gghealthd_libs ggl-svc)
++else()
++  list(APPEND gghealthd_libs PkgConfig::libsystemd)
++endif()
++ggl_init_module(gghealthd NO_INLINE_TEST LIBS ${gghealthd_libs})
+diff --git a/modules/gghealthd/src/health.c b/modules/gghealthd/src/health.c
+index ee29983..00843a7 100644
+--- a/modules/gghealthd/src/health.c
++++ b/modules/gghealthd/src/health.c
+@@ -2,6 +2,10 @@
+ // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
++// The systemd-free portable core uses health_portable.c and
++// subscriptions_portable.c instead.
++#ifndef GGL_PORTABLE_CORE
++
+ #include "health.h"
+ #include "bus_client.h"
+ #include "sd_bus.h"
+@@ -278,3 +282,5 @@ GgError gghealthd_init(void) {
+     init_health_events();
+     return GG_ERR_OK;
+ }
++
++#endif
+diff --git a/modules/gghealthd/src/health_portable.c b/modules/gghealthd/src/health_portable.c
+new file mode 100644
+index 0000000..3ecf05e
+--- /dev/null
++++ b/modules/gghealthd/src/health_portable.c
+@@ -0,0 +1,298 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++#ifdef GGL_PORTABLE_CORE
++
++#include "bus_client.h"
++#include "health.h"
++#include "portable.h"
++#include "subscriptions.h"
++#include <gg/arena.h>
++#include <gg/buffer.h>
++#include <gg/error.h>
++#include <gg/list.h>
++#include <gg/log.h>
++#include <gg/map.h>
++#include <gg/object.h>
++#include <ggl/nucleus/constants.h>
++#include <ggl/svc.h>
++#include <string.h>
++#include <unistd.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#define UNIT_NAME_MAX_LEN \
++    (sizeof(SERVICE_PREFIX) - 1 + GGL_COMPONENT_NAME_MAX_LEN \
++     + sizeof(SERVICE_SUFFIX) - 1)
++
++GgError portable_component_of_unit(const char *unit, GgBuffer *component) {
++    GgBuffer id = gg_buffer_from_null_term((char *) unit);
++    if (!gg_buffer_remove_prefix(&id, GG_STR(SERVICE_PREFIX))
++        || !gg_buffer_remove_suffix(&id, GG_STR(SERVICE_SUFFIX))
++        || (id.len == 0) || (id.len > component->len)) {
++        return GG_ERR_NOENTRY;
++    }
++    memcpy(component->data, id.data, id.len);
++    component->len = id.len;
++    return GG_ERR_OK;
++}
++
++GgError portable_parse_unit_line(char *line, char **unit, GgBuffer *state) {
++    char *save = NULL;
++    char *name = strtok_r(line, " ", &save);
++    char *active = strtok_r(NULL, " ", &save);
++    char *result = strtok_r(NULL, " ", &save);
++    char *restarts = strtok_r(NULL, " ", &save);
++    char *inactive_ts = strtok_r(NULL, " ", &save);
++    if ((name == NULL) || (active == NULL) || (result == NULL)
++        || (restarts == NULL) || (inactive_ts == NULL)) {
++        GG_LOGE("Malformed ggl-svcd unit status.");
++        return GG_ERR_PARSE;
++    }
++    *unit = name;
++
++    // Same mapping as the systemd backend (sd_bus.c get_lifecycle_state).
++    if (strcmp(active, "activating") == 0) {
++        *state = GG_STR("STARTING");
++    } else if (strcmp(active, "active") == 0) {
++        *state = GG_STR("RUNNING");
++    } else if (strcmp(active, "deactivating") == 0) {
++        *state = GG_STR("STOPPING");
++    } else if (strtoull(inactive_ts, NULL, 10) == 0) {
++        // inactive or failed but never ran
++        *state = GG_STR("INSTALLED");
++    } else if (strtoul(restarts, NULL, 10) >= 3) {
++        GG_LOGE("Component is broken (Exceeded retry limit)");
++        *state = GG_STR("BROKEN");
++    } else if (strcmp(result, "success") == 0) {
++        *state = GG_STR("FINISHED");
++    } else {
++        *state = GG_STR("ERRORED");
++    }
++    return GG_ERR_OK;
++}
++
++static GgError unit_name(GgBuffer component_name, char *out, size_t len) {
++    if (component_name.len > GGL_COMPONENT_NAME_MAX_LEN) {
++        GG_LOGE("component name too long");
++        return GG_ERR_RANGE;
++    }
++    int n = snprintf(
++        out,
++        len,
++        SERVICE_PREFIX "%.*s" SERVICE_SUFFIX,
++        (int) component_name.len,
++        component_name.data
++    );
++    return ((n > 0) && ((size_t) n < len)) ? GG_ERR_OK : GG_ERR_RANGE;
++}
++
++static GgError svc_call(const char *verb, const char *unit, char *resp) {
++    char request[UNIT_NAME_MAX_LEN + 32];
++    (void) snprintf(request, sizeof(request), "%s %s", verb, unit);
++    char local[UNIT_NAME_MAX_LEN + 96];
++    int ret = ggl_svc_call(
++        request,
++        (resp != NULL) ? resp : local,
++        (resp != NULL) ? UNIT_NAME_MAX_LEN + 96 : sizeof(local)
++    );
++    if (ret < 0) {
++        GG_LOGE("Cannot reach ggl-svcd for %s %s.", verb, unit);
++        return GG_ERR_NOCONN;
++    }
++    if (ret > 0) {
++        GG_LOGE(
++            "ggl-svcd %s %s failed: %s",
++            verb,
++            unit,
++            (resp != NULL) ? resp : local
++        );
++        return GG_ERR_FAILURE;
++    }
++    return GG_ERR_OK;
++}
++
++GgError gghealthd_get_status(GgBuffer component_name, GgBuffer *status) {
++    if (component_name.len > GGL_COMPONENT_NAME_MAX_LEN) {
++        GG_LOGE("component_name too long");
++        return GG_ERR_RANGE;
++    }
++    if (gg_buffer_eq(component_name, GG_STR("gghealthd"))) {
++        // report own status even if the orchestrator is unreachable
++        int fd = ggl_svc_connect();
++        if (fd >= 0) {
++            (void) close(fd);
++            *status = GG_STR("RUNNING");
++        } else {
++            *status = GG_STR("ERRORED");
++        }
++        return GG_ERR_OK;
++    }
++
++    // only relay lifecycle state for configured components
++    GgError err = verify_component_exists(component_name);
++    if (err != GG_ERR_OK) {
++        return err;
++    }
++
++    char unit[UNIT_NAME_MAX_LEN + 1];
++    err = unit_name(component_name, unit, sizeof(unit));
++    if (err != GG_ERR_OK) {
++        return GG_ERR_FAILURE;
++    }
++    char resp[UNIT_NAME_MAX_LEN + 96];
++    err = svc_call("show", unit, resp);
++    if (err != GG_ERR_OK) {
++        return GG_ERR_FAILURE;
++    }
++    char *name = NULL;
++    return portable_parse_unit_line(resp, &name, status);
++}
++
++GgError gghealthd_update_status(GgBuffer component_name, GgBuffer status) {
++    const GgMap STATUS_MAP = GG_MAP(
++        gg_kv(GG_STR("NEW"), GG_OBJ_NULL),
++        gg_kv(GG_STR("INSTALLED"), GG_OBJ_NULL),
++        gg_kv(GG_STR("STARTING"), gg_obj_buf(GG_STR("RELOADING"))),
++        gg_kv(GG_STR("RUNNING"), gg_obj_buf(GG_STR("READY"))),
++        gg_kv(GG_STR("ERRORED"), GG_OBJ_NULL),
++        gg_kv(GG_STR("BROKEN"), GG_OBJ_NULL),
++        gg_kv(GG_STR("STOPPING"), gg_obj_buf(GG_STR("STOPPING"))),
++        gg_kv(GG_STR("FINISHED"), GG_OBJ_NULL)
++    );
++
++    GgObject *status_obj = NULL;
++    if (!gg_map_get(STATUS_MAP, status, &status_obj)) {
++        GG_LOGE("Invalid lifecycle_state");
++        return GG_ERR_INVALID;
++    }
++
++    GgError err = verify_component_exists(component_name);
++    if (err != GG_ERR_OK) {
++        return err;
++    }
++    char unit[UNIT_NAME_MAX_LEN + 1];
++    err = unit_name(component_name, unit, sizeof(unit));
++    if (err != GG_ERR_OK) {
++        return err;
++    }
++    if (gg_obj_type(*status_obj) == GG_TYPE_NULL) {
++        return GG_ERR_OK;
++    }
++
++    // Equivalent of systemd-notify --ready|--reloading|--stopping in the
++    // component's unit.
++    char what[16];
++    GgBuffer notify = gg_obj_into_buf(*status_obj);
++    (void) snprintf(what, sizeof(what), "%.*s", (int) notify.len, notify.data);
++    char request[UNIT_NAME_MAX_LEN + 32];
++    (void) snprintf(request, sizeof(request), "%s %s", unit, what);
++    err = svc_call("notify", request, NULL);
++    if (err != GG_ERR_OK) {
++        GG_LOGE("Failed to notify status");
++    }
++
++    GG_LOGD(
++        "Component %.*s reported state updating to %.*s (%s)",
++        (int) component_name.len,
++        (const char *) component_name.data,
++        (int) status.len,
++        status.data,
++        what
++    );
++    return GG_ERR_OK;
++}
++
++GgError gghealthd_get_health(GgBuffer *status) {
++    int fd = ggl_svc_connect();
++    if (fd < 0) {
++        *status = GG_STR("UNHEALTHY");
++        return GG_ERR_OK;
++    }
++    (void) close(fd);
++    // TODO: check all root components (as the systemd backend)
++    *status = GG_STR("HEALTHY");
++    return GG_ERR_OK;
++}
++
++GgError gghealthd_restart_component(GgBuffer component_name) {
++    GgError err = verify_component_exists(component_name);
++    if (err != GG_ERR_OK) {
++        return err;
++    }
++    char unit[UNIT_NAME_MAX_LEN + 1];
++    err = unit_name(component_name, unit, sizeof(unit));
++    if (err != GG_ERR_OK) {
++        return GG_ERR_FAILURE;
++    }
++
++    // As the systemd backend: IPC-requested restarts do not count towards
++    // the burst limit.
++    (void) svc_call("reset-failed", unit, NULL);
++    err = svc_call("restart", unit, NULL);
++    if (err != GG_ERR_OK) {
++        return err;
++    }
++    (void) svc_call("reset-failed", unit, NULL);
++
++    GG_LOGI(
++        "Successfully restarted component %.*s",
++        (int) component_name.len,
++        component_name.data
++    );
++    return GG_ERR_OK;
++}
++
++static bool is_nucleus_component(GgBuffer component_name) {
++    static const char *const NUCLEUS[]
++        = { "DeploymentService",
++            "FleetStatusService",
++            "UpdateSystemPolicyService",
++            "TelemetryAgent",
++            "main",
++            "aws.greengrass.fleet_provisioning" };
++    for (size_t i = 0; i < sizeof(NUCLEUS) / sizeof(NUCLEUS[0]); i++) {
++        if (gg_buffer_eq(
++                component_name, gg_buffer_from_null_term((char *) NUCLEUS[i])
++            )) {
++            return true;
++        }
++    }
++    return is_nucleus_component_type(component_name);
++}
++
++static void reset_failed_components(void) {
++    static uint8_t component_list_buf[4096];
++    GgArena alloc = gg_arena_init(GG_BUF(component_list_buf));
++    GgList components;
++    GgError ret = get_root_component_list(&alloc, &components);
++    if (ret != GG_ERR_OK) {
++        GG_LOGW("Failed to get component list.");
++        return;
++    }
++    size_t reset_count = 0;
++    GG_LIST_FOREACH (component, components) {
++        GgBuffer component_name = gg_obj_into_buf(*component);
++        if (is_nucleus_component(component_name)) {
++            continue;
++        }
++        char unit[UNIT_NAME_MAX_LEN + 1];
++        if (unit_name(component_name, unit, sizeof(unit)) != GG_ERR_OK) {
++            continue;
++        }
++        ++reset_count;
++        (void) svc_call("reset-failed", unit, NULL);
++    }
++    GG_LOGD("Processed reset-failed for %zu components", reset_count);
++}
++
++GgError gghealthd_init(void) {
++    reset_failed_components();
++    init_health_events();
++    return GG_ERR_OK;
++}
++
++#endif
+diff --git a/modules/gghealthd/src/portable.h b/modules/gghealthd/src/portable.h
+new file mode 100644
+index 0000000..7991427
+--- /dev/null
++++ b/modules/gghealthd/src/portable.h
+@@ -0,0 +1,26 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++#ifndef GGHEALTHD_PORTABLE_H
++#define GGHEALTHD_PORTABLE_H
++
++// gghealthd backend for the systemd-free portable core: lifecycle states
++// come from ggl-svcd instead of systemd's D-Bus API.
++
++#include <gg/error.h>
++#include <gg/types.h>
++
++#define SERVICE_PREFIX "ggl."
++#define SERVICE_SUFFIX ".service"
++
++/// Lifecycle state from one ggl-svcd unit line
++/// ("<unit> <ActiveState> <Result> <NRestarts> <InactiveEnterUsec>"),
++/// with the same mapping gghealthd applies to systemd unit properties.
++/// On success *unit points into line and *state at a static string.
++GgError portable_parse_unit_line(char *line, char **unit, GgBuffer *state);
++
++/// "ggl.<component>.service" -> <component>; GG_ERR_NOENTRY otherwise.
++GgError portable_component_of_unit(const char *unit, GgBuffer *component);
++
++#endif
+diff --git a/modules/gghealthd/src/sd_bus.c b/modules/gghealthd/src/sd_bus.c
+index ce691f7..1c75605 100644
+--- a/modules/gghealthd/src/sd_bus.c
++++ b/modules/gghealthd/src/sd_bus.c
+@@ -2,6 +2,10 @@
+ // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
++// The systemd-free portable core uses health_portable.c and
++// subscriptions_portable.c instead.
++#ifndef GGL_PORTABLE_CORE
++
+ #include "sd_bus.h"
+ #include <assert.h>
+ #include <errno.h>
+@@ -416,3 +420,5 @@ GgError restart_component(sd_bus *bus, const char *qualified_name) {
+     }
+     return GG_ERR_OK;
+ }
++
++#endif
+diff --git a/modules/gghealthd/src/subscriptions.c b/modules/gghealthd/src/subscriptions.c
+index c739e9b..253c927 100644
+--- a/modules/gghealthd/src/subscriptions.c
++++ b/modules/gghealthd/src/subscriptions.c
+@@ -2,6 +2,10 @@
+ // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ // SPDX-License-Identifier: Apache-2.0
+ 
++// The systemd-free portable core uses health_portable.c and
++// subscriptions_portable.c instead.
++#ifndef GGL_PORTABLE_CORE
++
+ #include "subscriptions.h"
+ #include "sd_bus.h"
+ #include <assert.h>
+@@ -496,3 +500,5 @@ void gghealthd_unregister_all_component_state_changes_subscription(
+         );
+     }
+ }
++
++#endif
+diff --git a/modules/gghealthd/src/subscriptions_portable.c b/modules/gghealthd/src/subscriptions_portable.c
+new file mode 100644
+index 0000000..b26a460
+--- /dev/null
++++ b/modules/gghealthd/src/subscriptions_portable.c
+@@ -0,0 +1,210 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++#ifdef GGL_PORTABLE_CORE
++
++#include "portable.h"
++#include "subscriptions.h"
++#include <gg/buffer.h>
++#include <gg/error.h>
++#include <gg/log.h>
++#include <gg/map.h>
++#include <gg/object.h>
++#include <gg/utils.h>
++#include <ggl/core_bus/server.h>
++#include <ggl/nucleus/constants.h>
++#include <ggl/socket_server.h>
++#include <ggl/svc.h>
++#include <inttypes.h>
++#include <string.h>
++#include <unistd.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdlib.h>
++
++#ifndef GGHEALTHD_MAX_SUBSCRIPTIONS
++#define GGHEALTHD_MAX_SUBSCRIPTIONS 10
++#endif
++
++// SoA subscription layout, as in the systemd backend.
++static uint32_t handles[GGHEALTHD_MAX_SUBSCRIPTIONS];
++static size_t component_names_len[GGHEALTHD_MAX_SUBSCRIPTIONS];
++static uint8_t component_names[GGHEALTHD_MAX_SUBSCRIPTIONS]
++                              [GGL_COMPONENT_NAME_MAX_LEN];
++
++// Single all-component subscriber (ggdeploymentd), as in the systemd backend.
++static uint32_t broadcast_handle;
++
++static int watch_fd = -1;
++
++static bool is_terminal_state(GgBuffer status) {
++    return gg_buffer_eq(GG_STR("BROKEN"), status)
++        || gg_buffer_eq(GG_STR("FINISHED"), status)
++        || gg_buffer_eq(GG_STR("RUNNING"), status);
++}
++
++static void respond_state_change(
++    uint32_t handle, GgBuffer component_name, GgBuffer status
++) {
++    ggl_sub_respond(
++        handle,
++        gg_obj_map(GG_MAP(
++            gg_kv(GG_STR("component_name"), gg_obj_buf(component_name)),
++            gg_kv(GG_STR("lifecycle_state"), gg_obj_buf(status))
++        ))
++    );
++}
++
++static void dispatch_state_change(char *line) {
++    char *unit = NULL;
++    GgBuffer status = GG_STR("");
++    if (portable_parse_unit_line(line, &unit, &status) != GG_ERR_OK) {
++        return;
++    }
++    uint8_t name_bytes[GGL_COMPONENT_NAME_MAX_LEN];
++    GgBuffer component_name = GG_BUF(name_bytes);
++    if (portable_component_of_unit(unit, &component_name) != GG_ERR_OK) {
++        return;
++    }
++    if (!is_terminal_state(status)) {
++        GG_LOGD(
++            "%.*s changed to non-terminal state %.*s.",
++            (int) component_name.len,
++            component_name.data,
++            (int) status.len,
++            status.data
++        );
++        return;
++    }
++
++    for (int i = 0; i < GGHEALTHD_MAX_SUBSCRIPTIONS; ++i) {
++        if ((handles[i] != 0)
++            && gg_buffer_eq(
++                component_name,
++                gg_buffer_substr(
++                    GG_BUF(component_names[i]), 0, component_names_len[i]
++                )
++            )) {
++            GG_LOGI(
++                "%.*s finished their lifecycle (status=%.*s)",
++                (int) component_name.len,
++                component_name.data,
++                (int) status.len,
++                status.data
++            );
++            respond_state_change(handles[i], component_name, status);
++        }
++    }
++
++    // Core nucleus services are internal daemons; not broadcast.
++    if ((broadcast_handle != 0)
++        && !gg_buffer_has_prefix(component_name, GG_STR("core."))) {
++        GG_LOGI(
++            "Broadcasting component state change: %.*s -> %.*s",
++            (int) component_name.len,
++            component_name.data,
++            (int) status.len,
++            status.data
++        );
++        respond_state_change(broadcast_handle, component_name, status);
++    }
++}
++
++static void watch_callback(void) {
++    char line[GGL_COMPONENT_NAME_MAX_LEN + 128];
++    if (ggl_svc_read_line(watch_fd, line, sizeof(line)) < 0) {
++        // ggl-svcd went away. It supervises gghealthd, so exiting gets a
++        // fresh process with a fresh watch once it is back.
++        GG_LOGE("Lost the ggl-svcd state stream; exiting.");
++        _Exit(1);
++    }
++    dispatch_state_change(line);
++}
++
++void init_health_events(void) {
++    while (true) {
++        watch_fd = ggl_svc_connect();
++        if (watch_fd >= 0) {
++            char resp[64];
++            if ((write(watch_fd, "watch\n", 6) == 6)
++                && (ggl_svc_read_line(watch_fd, resp, sizeof(resp)) >= 0)
++                && (strncmp(resp, "ok", 2) == 0)) {
++                break;
++            }
++            (void) close(watch_fd);
++        }
++        GG_LOGE("Failed to watch ggl-svcd unit states.");
++        (void) gg_sleep(1);
++    }
++    ggl_socket_server_ext_fd = watch_fd;
++    ggl_socket_server_ext_handler = watch_callback;
++    GG_LOGD("ggl-svcd watch fd %d", watch_fd);
++}
++
++// core-bus functions //
++
++GgError gghealthd_register_lifecycle_subscription(
++    GgBuffer component_name, uint32_t handle
++) {
++    int index = 0;
++    for (; index < GGHEALTHD_MAX_SUBSCRIPTIONS; ++index) {
++        if (handles[index] == 0) {
++            break;
++        }
++    }
++    if (index == GGHEALTHD_MAX_SUBSCRIPTIONS) {
++        GG_LOGE("Unable to find open subscription slot.");
++        return GG_ERR_NOMEM;
++    }
++    if (component_name.len > GGL_COMPONENT_NAME_MAX_LEN) {
++        return GG_ERR_RANGE;
++    }
++    memcpy(component_names[index], component_name.data, component_name.len);
++    component_names_len[index] = component_name.len;
++    handles[index] = handle;
++    ggl_sub_accept(handle, gghealthd_unregister_lifecycle_subscription, NULL);
++    return GG_ERR_OK;
++}
++
++void gghealthd_unregister_lifecycle_subscription(void *ctx, uint32_t handle) {
++    (void) ctx;
++    for (int index = 0; index < GGHEALTHD_MAX_SUBSCRIPTIONS; ++index) {
++        if (handles[index] == handle) {
++            handles[index] = 0;
++            component_names_len[index] = 0;
++        }
++    }
++}
++
++GgError gghealthd_register_all_component_state_changes_subscription(
++    uint32_t handle
++) {
++    if (broadcast_handle != 0) {
++        GG_LOGW(
++            "Replacing existing all-component state-change subscriber "
++            "(old handle=%" PRIu32 ", new handle=%" PRIu32 ").",
++            broadcast_handle,
++            handle
++        );
++    }
++    broadcast_handle = handle;
++    ggl_sub_accept(
++        handle,
++        gghealthd_unregister_all_component_state_changes_subscription,
++        NULL
++    );
++    return GG_ERR_OK;
++}
++
++void gghealthd_unregister_all_component_state_changes_subscription(
++    void *ctx, uint32_t handle
++) {
++    (void) ctx;
++    if (broadcast_handle == handle) {
++        broadcast_handle = 0;
++    }
++}
++
++#endif
+diff --git a/modules/ggipc-auth/CMakeLists.txt b/modules/ggipc-auth/CMakeLists.txt
+index eb8db9e..c50b043 100644
+--- a/modules/ggipc-auth/CMakeLists.txt
++++ b/modules/ggipc-auth/CMakeLists.txt
+@@ -2,7 +2,11 @@
+ # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
+-ggl_init_module(
+-  ggipc-auth
+-  NO_INLINE_TEST
+-  LIBS gg-sdk PkgConfig::libsystemd)
++if(GGL_PORTABLE_CORE)
++  ggl_init_module(ggipc-auth NO_INLINE_TEST LIBS gg-sdk ggl-svc)
++else()
++  ggl_init_module(
++    ggipc-auth
++    NO_INLINE_TEST
++    LIBS gg-sdk PkgConfig::libsystemd)
++endif()
+diff --git a/modules/ggipc-auth/src/auth.c b/modules/ggipc-auth/src/auth.c
+index 3772869..62b1dfd 100644
+--- a/modules/ggipc-auth/src/auth.c
++++ b/modules/ggipc-auth/src/auth.c
+@@ -10,9 +10,25 @@
+ #include <ggipc/auth.h>
+ #include <string.h>
+ #include <sys/types.h>
++#ifdef GGL_PORTABLE_CORE
++#include <ggl/svc.h>
++#include <stdio.h>
++#else
+ #include <systemd/sd-login.h>
++#endif
+ 
+ GgError ggl_ipc_auth_validate_name(pid_t pid, GgBuffer component_name) {
++#ifdef GGL_PORTABLE_CORE
++    // Without systemd, ggl-svcd knows which unit a process belongs to: the
++    // unit whose main process is the peer or one of its ancestors.
++    char request[32];
++    char unit_name[256];
++    (void) snprintf(request, sizeof(request), "whois %ld", (long) pid);
++    if (ggl_svc_call(request, unit_name, sizeof(unit_name)) != 0) {
++        GG_LOGE("Failed to look up service for pid %d.", pid);
++        return GG_ERR_FAILURE;
++    }
++#else
+     char *unit_name = NULL;
+     int error = sd_pid_get_unit(pid, &unit_name);
+     GG_CLEANUP(cleanup_free, unit_name);
+@@ -20,6 +36,7 @@ GgError ggl_ipc_auth_validate_name(pid_t pid, GgBuffer component_name) {
+         GG_LOGE("Failed to look up service for pid %d.", pid);
+         return GG_ERR_FAILURE;
+     }
++#endif
+ 
+     GgBuffer name = gg_buffer_from_null_term(unit_name);
+ 
+diff --git a/modules/ggl-svc/CMakeLists.txt b/modules/ggl-svc/CMakeLists.txt
+new file mode 100644
+index 0000000..4f2ab10
+--- /dev/null
++++ b/modules/ggl-svc/CMakeLists.txt
+@@ -0,0 +1,10 @@
++# aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++# SPDX-License-Identifier: Apache-2.0
++
++# Service manager for the systemd-free portable core (see bin/ggl-svcd.c).
++if(GGL_PORTABLE_CORE)
++  ggl_init_module(ggl-svc NO_INLINE_TEST)
++  file(GLOB CORE_UNITS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/units/*")
++  install(FILES ${CORE_UNITS} DESTINATION lib/ggl-svc)
++endif()
+diff --git a/modules/ggl-svc/bin/ggl-svcd.c b/modules/ggl-svc/bin/ggl-svcd.c
+new file mode 100644
+index 0000000..2bdaec5
+--- /dev/null
++++ b/modules/ggl-svc/bin/ggl-svcd.c
+@@ -0,0 +1,1136 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++// ggl-svcd: a small service manager that stands in for systemd in the
++// systemd-free portable core (GGL_PORTABLE_CORE).
++//
++// It runs the unit files Greengrass Lite generates (recipe2unit) and the
++// core daemon units in GGL_SVC_CORE_DIR, honouring the subset of systemd
++// semantics they use: Type=exec|simple|oneshot|notify, ExecStart, User,
++// Group, WorkingDirectory, Environment, Restart, RestartSec,
++// RemainAfterExit, SuccessExitStatus, StartLimitBurst and After=/Wants=/
++// BindsTo= ordering. It tracks the unit properties gghealthd derives
++// lifecycle states from (ActiveState, Result, NRestarts,
++// InactiveEnterTimestampMonotonic) and serves them, plus start/stop
++// control, over GGL_SVC_SOCKET (see ggl/svc.h).
++//
++// Extension: X-GGL-ReadySocket=<path> keeps a unit "activating" until the
++// path exists as a socket; it replaces systemd socket activation for the
++// core daemons.
++//
++// It also answers which unit a process belongs to ("whois <pid>": the unit
++// whose main process is the pid or one of its ancestors), which ggipc-auth
++// uses in place of systemd's cgroup-based sd_pid_get_unit(). Requests that
++// change state are only accepted from root (SO_PEERCRED).
++//
++// Unit output goes to syslog, one message per line tagged with the unit
++// (as the journal would hold it), so its size stays bounded by syslogd's
++// rotation instead of growing in a tmpfs.
++
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <ggl/svc.h>
++#include <grp.h>
++#include <poll.h>
++#include <pwd.h>
++#include <signal.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <sys/un.h>
++#include <sys/wait.h>
++#include <syslog.h>
++#include <time.h>
++#include <unistd.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#ifndef GGL_SVC_CORE_DIR
++#define GGL_SVC_CORE_DIR "/usr/lib/ggl-svc"
++#endif
++#define STATE_DIR "/var/lib/greengrass/svc"
++#define LOG_LINE_MAX 480
++
++#define MAX_UNITS 48
++#define MAX_DEPS 8
++#define MAX_ENV 8
++#define MAX_CLIENTS 16
++#define NAME_LEN 160
++#define PATH_LEN 256
++#define STOP_TIMEOUT_MS 10000
++
++typedef enum {
++    T_EXEC,
++    T_ONESHOT,
++    T_NOTIFY
++} UnitType;
++
++typedef enum {
++    R_NO,
++    R_ON_FAILURE,
++    R_ALWAYS
++} RestartPolicy;
++
++typedef enum {
++    S_INACTIVE,
++    S_ACTIVATING,
++    S_ACTIVE,
++    S_DEACTIVATING,
++    S_FAILED
++} UnitState;
++
++static const char *const STATE_NAMES[]
++    = { "inactive", "activating", "active", "deactivating", "failed" };
++
++typedef struct {
++    char name[NAME_LEN];
++    char path[PATH_LEN];
++    bool loaded;
++    bool core;
++
++    UnitType type;
++    char exec[512];
++    char user[64];
++    char group[64];
++    char workdir[PATH_LEN];
++    char env[MAX_ENV][256];
++    int n_env;
++    RestartPolicy restart;
++    unsigned restart_sec;
++    bool remain;
++    int success_status[4];
++    int n_success;
++    unsigned start_limit_burst;
++    char after[MAX_DEPS][NAME_LEN];
++    int n_after;
++    char wants[MAX_DEPS][NAME_LEN];
++    int n_wants;
++    char ready_socket[PATH_LEN];
++
++    UnitState state;
++    char result[32];
++    pid_t pid;
++    unsigned n_restarts;
++    uint64_t inactive_enter_usec;
++    bool start_pending;
++    bool stop_requested;
++    bool restart_after_stop;
++    uint64_t restart_at_ms;
++    uint64_t kill_at_ms;
++
++    int log_fd;
++    char log_buf[LOG_LINE_MAX + 1];
++    size_t log_len;
++} Unit;
++
++static Unit units[MAX_UNITS];
++static int n_units;
++
++static int watchers[MAX_CLIENTS];
++static int n_watchers;
++
++static volatile sig_atomic_t terminate;
++
++static void logmsg(const char *fmt, ...) {
++    va_list ap;
++    va_start(ap, fmt);
++    vsyslog(LOG_NOTICE, fmt, ap);
++    va_end(ap);
++}
++
++static uint64_t now_usec(void) {
++    struct timespec ts;
++    (void) clock_gettime(CLOCK_MONOTONIC, &ts);
++    return ((uint64_t) ts.tv_sec * 1000000U) + ((uint64_t) ts.tv_nsec / 1000U);
++}
++
++static uint64_t now_ms(void) {
++    return now_usec() / 1000U;
++}
++
++static Unit *find_unit(const char *name) {
++    for (int i = 0; i < n_units; i++) {
++        if (strcmp(units[i].name, name) == 0) {
++            return &units[i];
++        }
++    }
++    return NULL;
++}
++
++// State notifications //
++
++static void format_unit(const Unit *u, char *buf, size_t len) {
++    (void) snprintf(
++        buf,
++        len,
++        "%s %s %s %u %llu",
++        u->name,
++        STATE_NAMES[u->state],
++        u->result,
++        u->n_restarts,
++        (unsigned long long) u->inactive_enter_usec
++    );
++}
++
++static void broadcast(const Unit *u) {
++    char line[NAME_LEN + 96];
++    format_unit(u, line, sizeof(line) - 1);
++    size_t len = strlen(line);
++    line[len++] = '\n';
++    for (int i = 0; i < n_watchers;) {
++        ssize_t n = send(watchers[i], line, len, MSG_DONTWAIT | MSG_NOSIGNAL);
++        if (n != (ssize_t) len) {
++            (void) close(watchers[i]);
++            watchers[i] = watchers[--n_watchers];
++            continue;
++        }
++        i++;
++    }
++}
++
++static void set_state(Unit *u, UnitState state) {
++    if (u->state == state) {
++        return;
++    }
++    if ((state == S_INACTIVE) || (state == S_FAILED)) {
++        u->inactive_enter_usec = now_usec();
++    }
++    u->state = state;
++    logmsg("%s: %s (%s)", u->name, STATE_NAMES[state], u->result);
++    broadcast(u);
++}
++
++// Unit file parsing //
++
++static char *trim(char *s) {
++    while ((*s == ' ') || (*s == '\t')) {
++        s++;
++    }
++    size_t n = strlen(s);
++    while ((n > 0)
++           && ((s[n - 1] == ' ') || (s[n - 1] == '\t') || (s[n - 1] == '\n')
++               || (s[n - 1] == '\r'))) {
++        s[--n] = '\0';
++    }
++    return s;
++}
++
++static void add_deps(char list[][NAME_LEN], int *count, char *value) {
++    for (char *tok = strtok(value, " "); tok != NULL; tok = strtok(NULL, " ")) {
++        if ((*count < MAX_DEPS) && (strncmp(tok, "ggl.", 4) == 0)) {
++            (void) snprintf(list[(*count)++], NAME_LEN, "%s", tok);
++        }
++    }
++}
++
++static void reset_config(Unit *u) {
++    u->type = T_EXEC;
++    u->exec[0] = '\0';
++    u->user[0] = '\0';
++    u->group[0] = '\0';
++    u->workdir[0] = '\0';
++    u->n_env = 0;
++    u->restart = R_NO;
++    u->restart_sec = 1;
++    u->remain = false;
++    u->n_success = 0;
++    u->start_limit_burst = 5;
++    u->n_after = 0;
++    u->n_wants = 0;
++    u->ready_socket[0] = '\0';
++}
++
++static bool parse_unit(Unit *u) {
++    FILE *f = fopen(u->path, "r");
++    if (f == NULL) {
++        logmsg("%s: cannot read %s: %s", u->name, u->path, strerror(errno));
++        return false;
++    }
++    reset_config(u);
++    char line[768];
++    while (fgets(line, sizeof(line), f) != NULL) {
++        char *l = trim(line);
++        if ((*l == '#') || (*l == ';') || (*l == '[') || (*l == '\0')) {
++            continue;
++        }
++        char *eq = strchr(l, '=');
++        if (eq == NULL) {
++            continue;
++        }
++        *eq = '\0';
++        char *key = trim(l);
++        char *val = trim(eq + 1);
++
++        if (strcmp(key, "Type") == 0) {
++            if (strcmp(val, "oneshot") == 0) {
++                u->type = T_ONESHOT;
++            } else if (strcmp(val, "notify") == 0) {
++                u->type = T_NOTIFY;
++            } else {
++                u->type = T_EXEC;
++            }
++        } else if (strcmp(key, "ExecStart") == 0) {
++            (void) snprintf(u->exec, sizeof(u->exec), "%s", val);
++        } else if (strcmp(key, "User") == 0) {
++            (void) snprintf(u->user, sizeof(u->user), "%s", val);
++        } else if (strcmp(key, "Group") == 0) {
++            (void) snprintf(u->group, sizeof(u->group), "%s", val);
++        } else if (strcmp(key, "WorkingDirectory") == 0) {
++            (void) snprintf(u->workdir, sizeof(u->workdir), "%s", val);
++        } else if (strcmp(key, "Environment") == 0) {
++            if (u->n_env < MAX_ENV) {
++                size_t n = strlen(val);
++                if ((n >= 2) && (val[0] == '"') && (val[n - 1] == '"')) {
++                    val[n - 1] = '\0';
++                    val++;
++                }
++                (void) snprintf(u->env[u->n_env++], 256, "%s", val);
++            }
++        } else if (strcmp(key, "Restart") == 0) {
++            u->restart = (strcmp(val, "always") == 0) ? R_ALWAYS
++                : (strcmp(val, "on-failure") == 0)    ? R_ON_FAILURE
++                                                      : R_NO;
++        } else if (strcmp(key, "RestartSec") == 0) {
++            u->restart_sec = (unsigned) strtoul(val, NULL, 10);
++        } else if (strcmp(key, "RemainAfterExit") == 0) {
++            u->remain = (strcmp(val, "true") == 0) || (strcmp(val, "yes") == 0);
++        } else if (strcmp(key, "SuccessExitStatus") == 0) {
++            for (char *tok = strtok(val, " ");
++                 (tok != NULL) && (u->n_success < 4);
++                 tok = strtok(NULL, " ")) {
++                u->success_status[u->n_success++] = atoi(tok);
++            }
++        } else if (strcmp(key, "StartLimitBurst") == 0) {
++            u->start_limit_burst = (unsigned) strtoul(val, NULL, 10);
++        } else if (strcmp(key, "After") == 0) {
++            add_deps(u->after, &u->n_after, val);
++        } else if (
++            (strcmp(key, "Wants") == 0) || (strcmp(key, "BindsTo") == 0)
++        ) {
++            add_deps(u->wants, &u->n_wants, val);
++        } else if (strcmp(key, "X-GGL-ReadySocket") == 0) {
++            (void) snprintf(
++                u->ready_socket, sizeof(u->ready_socket), "%s", val
++            );
++        }
++    }
++    (void) fclose(f);
++    if (u->exec[0] == '\0') {
++        logmsg("%s: no ExecStart", u->name);
++        return false;
++    }
++    return true;
++}
++
++static Unit *load_unit(const char *name, const char *path, bool core) {
++    Unit *u = find_unit(name);
++    if (u == NULL) {
++        if (n_units == MAX_UNITS) {
++            logmsg("too many units, ignoring %s", name);
++            return NULL;
++        }
++        u = &units[n_units++];
++        memset(u, 0, sizeof(*u));
++        u->log_fd = -1;
++        (void) snprintf(u->name, sizeof(u->name), "%s", name);
++        (void) snprintf(u->result, sizeof(u->result), "success");
++    }
++    (void) snprintf(u->path, sizeof(u->path), "%s", path);
++    u->core = core;
++    u->loaded = parse_unit(u);
++    return u;
++}
++
++static bool is_enabled(const Unit *u) {
++    if (u->core) {
++        return true;
++    }
++    char path[PATH_LEN + NAME_LEN];
++    (void) snprintf(path, sizeof(path), STATE_DIR "/enabled/%s", u->name);
++    return access(path, F_OK) == 0;
++}
++
++static void load_dir(const char *dir, bool core, bool resolve_links) {
++    DIR *d = opendir(dir);
++    if (d == NULL) {
++        return;
++    }
++    struct dirent *e;
++    while ((e = readdir(d)) != NULL) {
++        size_t n = strlen(e->d_name);
++        if ((n < 9) || (strcmp(e->d_name + n - 8, ".service") != 0)) {
++            continue;
++        }
++        char path[PATH_LEN];
++        (void) snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
++        if (resolve_links) {
++            char target[PATH_LEN];
++            ssize_t len = readlink(path, target, sizeof(target) - 1);
++            if (len <= 0) {
++                continue;
++            }
++            target[len] = '\0';
++            (void) snprintf(path, sizeof(path), "%s", target);
++        }
++        (void) load_unit(e->d_name, path, core);
++    }
++    (void) closedir(d);
++}
++
++static void load_all(void) {
++    load_dir(GGL_SVC_CORE_DIR, true, false);
++    load_dir(STATE_DIR "/links", false, true);
++}
++
++// Process management //
++
++static void build_env(
++    const Unit *u, char **envp, char storage[][320], int max
++) {
++    int n = 0;
++    (void) snprintf(
++        storage[n],
++        320,
++        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:"
++        "/usr/bin:/sbin:/bin"
++    );
++    envp[n] = storage[n];
++    n++;
++    struct passwd *pw = (u->user[0] != '\0') ? getpwnam(u->user) : getpwuid(0);
++    if (pw != NULL) {
++        (void) snprintf(storage[n], 320, "HOME=%s", pw->pw_dir);
++        envp[n] = storage[n];
++        n++;
++        (void) snprintf(storage[n], 320, "USER=%s", pw->pw_name);
++        envp[n] = storage[n];
++        n++;
++        (void) snprintf(storage[n], 320, "LOGNAME=%s", pw->pw_name);
++        envp[n] = storage[n];
++        n++;
++    }
++    for (int i = 0; (i < u->n_env) && (n < max - 1); i++) {
++        (void) snprintf(storage[n], 320, "%s", u->env[i]);
++        envp[n] = storage[n];
++        n++;
++    }
++    envp[n] = NULL;
++}
++
++// Runs in the child; never returns.
++static void exec_unit(const Unit *u, int log_fd) {
++    (void) setsid();
++    sigset_t none;
++    (void) sigemptyset(&none);
++    (void) sigprocmask(SIG_SETMASK, &none, NULL);
++    (void) signal(SIGPIPE, SIG_DFL);
++
++    int devnull = open("/dev/null", O_RDONLY);
++    if (devnull >= 0) {
++        (void) dup2(devnull, STDIN_FILENO);
++        (void) close(devnull);
++    }
++    if (log_fd >= 0) {
++        (void) dup2(log_fd, STDOUT_FILENO);
++        (void) dup2(log_fd, STDERR_FILENO);
++        (void) close(log_fd);
++    }
++
++    const char *dir = (u->workdir[0] != '\0') ? u->workdir : "/";
++    if (chdir(dir) != 0) {
++        (void) fprintf(stderr, "chdir %s: %s\n", dir, strerror(errno));
++        _exit(200);
++    }
++
++    if (u->user[0] != '\0') {
++        struct passwd *pw = getpwnam(u->user);
++        if (pw == NULL) {
++            (void) fprintf(stderr, "unknown user %s\n", u->user);
++            _exit(217);
++        }
++        gid_t gid = pw->pw_gid;
++        if (u->group[0] != '\0') {
++            struct group *gr = getgrnam(u->group);
++            if (gr == NULL) {
++                (void) fprintf(stderr, "unknown group %s\n", u->group);
++                _exit(216);
++            }
++            gid = gr->gr_gid;
++        }
++        if ((initgroups(pw->pw_name, gid) != 0) || (setgid(gid) != 0)
++            || (setuid(pw->pw_uid) != 0)) {
++            (void) fprintf(stderr, "cannot switch to %s\n", u->user);
++            _exit(217);
++        }
++    }
++
++    static char storage[MAX_ENV + 8][320];
++    char *envp[MAX_ENV + 8];
++    build_env(u, envp, storage, MAX_ENV + 8);
++
++    // systemd splits ExecStart itself; the generated lines need no more
++    // than the shell's word splitting and quoting.
++    static char sh[] = "/bin/sh";
++    static char dash_c[] = "-c";
++    char cmd[600];
++    (void) snprintf(cmd, sizeof(cmd), "exec %s", u->exec);
++    char *argv[] = { sh, dash_c, cmd, NULL };
++    (void) execve("/bin/sh", argv, envp);
++    _exit(203);
++}
++
++// Unit output: forward complete lines to syslog, tagged with the unit name
++// without its ggl. prefix and .service suffix.
++static void emit_line(Unit *u) {
++    char tag[NAME_LEN];
++    (void) snprintf(tag, sizeof(tag), "%s", u->name);
++    size_t n = strlen(tag);
++    if ((n > 8) && (strcmp(tag + n - 8, ".service") == 0)) {
++        tag[n - 8] = '\0';
++    }
++    const char *t = (strncmp(tag, "ggl.", 4) == 0) ? tag + 4 : tag;
++    u->log_buf[u->log_len] = '\0';
++    if (u->log_len > 0) {
++        syslog(LOG_INFO, "%s: %s", t, u->log_buf);
++    }
++    u->log_len = 0;
++}
++
++static void drain_log(Unit *u) {
++    char chunk[512];
++    ssize_t n;
++    while ((n = read(u->log_fd, chunk, sizeof(chunk))) > 0) {
++        for (ssize_t i = 0; i < n; i++) {
++            if (chunk[i] == '\n') {
++                emit_line(u);
++            } else if (u->log_len == LOG_LINE_MAX) {
++                emit_line(u);
++                u->log_buf[u->log_len++] = chunk[i];
++            } else {
++                u->log_buf[u->log_len++] = chunk[i];
++            }
++        }
++    }
++    if ((n == 0) || ((n < 0) && (errno != EAGAIN) && (errno != EINTR))) {
++        emit_line(u);
++        (void) close(u->log_fd);
++        u->log_fd = -1;
++    }
++}
++
++static void spawn(Unit *u) {
++    if (!u->loaded) {
++        (void) snprintf(u->result, sizeof(u->result), "resources");
++        set_state(u, S_FAILED);
++        return;
++    }
++    if (u->ready_socket[0] != '\0') {
++        // A socket left by a previous instance must not count as ready.
++        (void) unlink(u->ready_socket);
++    }
++    if (u->log_fd >= 0) {
++        // Output of a previous run not read yet: forward it first.
++        drain_log(u);
++        if (u->log_fd >= 0) {
++            (void) close(u->log_fd);
++            u->log_fd = -1;
++        }
++    }
++    int pipefd[2] = { -1, -1 };
++    if (pipe2(pipefd, O_CLOEXEC) != 0) {
++        logmsg("%s: pipe: %s", u->name, strerror(errno));
++    }
++    pid_t pid = fork();
++    if (pid < 0) {
++        logmsg("%s: fork: %s", u->name, strerror(errno));
++        (void) close(pipefd[0]);
++        (void) close(pipefd[1]);
++        (void) snprintf(u->result, sizeof(u->result), "resources");
++        set_state(u, S_FAILED);
++        return;
++    }
++    if (pid == 0) {
++        exec_unit(u, pipefd[1]);
++    }
++    if (pipefd[1] >= 0) {
++        (void) close(pipefd[1]);
++    }
++    u->log_fd = pipefd[0];
++    if (u->log_fd >= 0) {
++        (void) fcntl(u->log_fd, F_SETFL, O_NONBLOCK);
++    }
++    u->pid = pid;
++    u->stop_requested = false;
++    u->kill_at_ms = 0;
++    (void) snprintf(u->result, sizeof(u->result), "success");
++    bool ready = (u->type == T_EXEC) && (u->ready_socket[0] == '\0');
++    set_state(u, ready ? S_ACTIVE : S_ACTIVATING);
++}
++
++static bool dep_settled(const char *name) {
++    Unit *d = find_unit(name);
++    if ((d == NULL) || !d->loaded) {
++        return true;
++    }
++    if (d->start_pending) {
++        return false;
++    }
++    if (d->core) {
++        // Core daemons must be listening before their dependents start.
++        return d->state == S_ACTIVE;
++    }
++    return (d->state != S_ACTIVATING) && (d->state != S_DEACTIVATING);
++}
++
++static void request_start(Unit *u);
++
++static void request_start(Unit *u) {
++    if ((u->state == S_ACTIVE) || (u->state == S_ACTIVATING)
++        || u->start_pending) {
++        return;
++    }
++    u->start_pending = true;
++    u->restart_at_ms = 0;
++    for (int i = 0; i < u->n_wants; i++) {
++        Unit *d = find_unit(u->wants[i]);
++        if (d != NULL) {
++            request_start(d);
++        }
++    }
++}
++
++static void process_pending(void) {
++    for (int i = 0; i < n_units; i++) {
++        Unit *u = &units[i];
++        if (!u->start_pending || (u->pid > 0)) {
++            continue;
++        }
++        bool ready = true;
++        for (int d = 0; d < u->n_after; d++) {
++            if (!dep_settled(u->after[d])) {
++                ready = false;
++                break;
++            }
++        }
++        if (ready) {
++            u->start_pending = false;
++            spawn(u);
++        }
++    }
++}
++
++static void request_stop(Unit *u) {
++    u->start_pending = false;
++    u->restart_at_ms = 0;
++    if (u->pid > 0) {
++        u->stop_requested = true;
++        u->kill_at_ms = now_ms() + STOP_TIMEOUT_MS;
++        (void) kill(-u->pid, SIGTERM);
++        set_state(u, S_DEACTIVATING);
++    } else if ((u->state == S_ACTIVE) || (u->state == S_ACTIVATING)) {
++        set_state(u, S_INACTIVE);
++    }
++}
++
++static bool exit_is_success(const Unit *u, int status) {
++    if (WIFEXITED(status)) {
++        int code = WEXITSTATUS(status);
++        if (code == 0) {
++            return true;
++        }
++        for (int i = 0; i < u->n_success; i++) {
++            if (u->success_status[i] == code) {
++                return true;
++            }
++        }
++        return false;
++    }
++    return u->stop_requested && WIFSIGNALED(status)
++        && ((WTERMSIG(status) == SIGTERM) || (WTERMSIG(status) == SIGKILL));
++}
++
++static void unit_exited(Unit *u, int status) {
++    u->pid = 0;
++    bool success = exit_is_success(u, status);
++
++    if (u->stop_requested) {
++        u->stop_requested = false;
++        (void) snprintf(u->result, sizeof(u->result), "success");
++        set_state(u, S_INACTIVE);
++        if (u->restart_after_stop) {
++            u->restart_after_stop = false;
++            request_start(u);
++        }
++        return;
++    }
++
++    if (success) {
++        (void) snprintf(u->result, sizeof(u->result), "success");
++        if ((u->type == T_ONESHOT) && u->remain) {
++            set_state(u, S_ACTIVE);
++            return;
++        }
++        if (u->restart != R_ALWAYS) {
++            set_state(u, S_INACTIVE);
++            return;
++        }
++    } else {
++        (void) snprintf(
++            u->result,
++            sizeof(u->result),
++            "%s",
++            WIFSIGNALED(status) ? "signal" : "exit-code"
++        );
++    }
++
++    if (u->restart == R_NO) {
++        set_state(u, S_FAILED);
++        return;
++    }
++    if (u->n_restarts >= u->start_limit_burst) {
++        (void) snprintf(u->result, sizeof(u->result), "start-limit-hit");
++        set_state(u, S_FAILED);
++        return;
++    }
++    u->n_restarts++;
++    u->restart_at_ms = now_ms() + ((uint64_t) u->restart_sec * 1000U);
++    // systemd reports a unit waiting to auto-restart as activating.
++    set_state(u, S_ACTIVATING);
++}
++
++static void reap_children(void) {
++    int status;
++    pid_t pid;
++    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
++        for (int i = 0; i < n_units; i++) {
++            if (units[i].pid == pid) {
++                unit_exited(&units[i], status);
++                break;
++            }
++        }
++    }
++}
++
++static void process_timers(void) {
++    uint64_t now = now_ms();
++    for (int i = 0; i < n_units; i++) {
++        Unit *u = &units[i];
++        if ((u->restart_at_ms != 0) && (now >= u->restart_at_ms)) {
++            u->restart_at_ms = 0;
++            if (u->pid == 0) {
++                spawn(u);
++            }
++        }
++        if ((u->kill_at_ms != 0) && (now >= u->kill_at_ms) && (u->pid > 0)) {
++            u->kill_at_ms = 0;
++            (void) kill(-u->pid, SIGKILL);
++        }
++        if ((u->state == S_ACTIVATING) && (u->pid > 0)
++            && (u->ready_socket[0] != '\0')) {
++            struct stat st;
++            if ((stat(u->ready_socket, &st) == 0) && S_ISSOCK(st.st_mode)) {
++                set_state(u, S_ACTIVE);
++            }
++        }
++    }
++}
++
++// Control protocol //
++
++static void reply(int fd, const char *fmt, ...) {
++    char buf[1024];
++    va_list ap;
++    va_start(ap, fmt);
++    int n = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
++    va_end(ap);
++    if (n < 0) {
++        return;
++    }
++    if ((size_t) n > sizeof(buf) - 2) {
++        n = (int) sizeof(buf) - 2;
++    }
++    buf[n++] = '\n';
++    (void) send(fd, buf, (size_t) n, MSG_NOSIGNAL);
++}
++
++static bool valid_unit_name(const char *name) {
++    return (name != NULL) && (name[0] != '\0') && (strchr(name, '/') == NULL)
++        && (strlen(name) < NAME_LEN);
++}
++
++static void cmd_link(int fd, const char *path) {
++    const char *base = strrchr(path, '/');
++    base = (base != NULL) ? base + 1 : path;
++    if ((path[0] != '/') || !valid_unit_name(base)) {
++        reply(fd, "err invalid unit path %s", path);
++        return;
++    }
++    char link[PATH_LEN + NAME_LEN];
++    (void) snprintf(link, sizeof(link), STATE_DIR "/links/%s", base);
++    (void) unlink(link);
++    if (symlink(path, link) != 0) {
++        reply(fd, "err link %s: %s", base, strerror(errno));
++        return;
++    }
++    Unit *u = load_unit(base, path, false);
++    if ((u == NULL) || !u->loaded) {
++        reply(fd, "err cannot load %s", base);
++        return;
++    }
++    reply(fd, "ok");
++}
++
++static void cmd_enable(int fd, Unit *u, bool enable) {
++    char path[PATH_LEN + NAME_LEN];
++    (void) snprintf(path, sizeof(path), STATE_DIR "/enabled/%s", u->name);
++    if (enable) {
++        int f = open(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
++        if (f < 0) {
++            reply(fd, "err enable %s: %s", u->name, strerror(errno));
++            return;
++        }
++        (void) close(f);
++    } else {
++        (void) unlink(path);
++        if (!u->core) {
++            // systemctl disable also removes the link made by link.
++            (void) snprintf(path, sizeof(path), STATE_DIR "/links/%s", u->name);
++            (void) unlink(path);
++        }
++    }
++    reply(fd, "ok");
++}
++
++static void reset_failed(Unit *u) {
++    u->n_restarts = 0;
++    if (u->state == S_FAILED) {
++        (void) snprintf(u->result, sizeof(u->result), "success");
++        set_state(u, S_INACTIVE);
++    }
++}
++
++// The unit whose main process is pid or one of its ancestors. A process
++// cannot change its ancestry, but it can leave it by being re-parented to
++// init, in which case it no longer belongs to any unit.
++static Unit *unit_of_pid(pid_t pid) {
++    for (int depth = 0; (pid > 1) && (depth < 64); depth++) {
++        for (int i = 0; i < n_units; i++) {
++            if (units[i].pid == pid) {
++                return &units[i];
++            }
++        }
++        char path[64];
++        (void) snprintf(path, sizeof(path), "/proc/%ld/stat", (long) pid);
++        FILE *f = fopen(path, "r");
++        if (f == NULL) {
++            return NULL;
++        }
++        char buf[512];
++        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
++        (void) fclose(f);
++        buf[n] = '\0';
++        // pid (comm) state ppid ...; comm may contain spaces and ')'.
++        char *end = strrchr(buf, ')');
++        long ppid = 0;
++        if ((end == NULL) || (sscanf(end + 1, " %*c %ld", &ppid) != 1)) {
++            return NULL;
++        }
++        pid = (pid_t) ppid;
++    }
++    return NULL;
++}
++
++static bool read_only_verb(const char *verb) {
++    return (strcmp(verb, "show") == 0) || (strcmp(verb, "whois") == 0);
++}
++
++static void handle_request(int fd, char *line, uid_t peer_uid) {
++    char *verb = strtok(line, " ");
++    char *arg = strtok(NULL, " ");
++    if (verb == NULL) {
++        reply(fd, "err empty request");
++        return;
++    }
++    if ((peer_uid != 0) && !read_only_verb(verb)) {
++        reply(fd, "err permission denied");
++        return;
++    }
++
++    if (strcmp(verb, "whois") == 0) {
++        long pid = (arg != NULL) ? strtol(arg, NULL, 10) : 0;
++        Unit *u = (pid > 1) ? unit_of_pid((pid_t) pid) : NULL;
++        if (u == NULL) {
++            reply(fd, "err no unit");
++        } else {
++            reply(fd, "ok %s", u->name);
++        }
++        return;
++    }
++
++    if (strcmp(verb, "watch") == 0) {
++        if (n_watchers == MAX_CLIENTS) {
++            reply(fd, "err too many watchers");
++            return;
++        }
++        reply(fd, "ok");
++        watchers[n_watchers++] = fd;
++        return;
++    }
++    if (strcmp(verb, "daemon-reload") == 0) {
++        for (int i = 0; i < n_units;) {
++            Unit *u = &units[i];
++            if (!u->core && (u->pid == 0) && (access(u->path, F_OK) != 0)) {
++                // Removed by a deployment: forget it.
++                if (u->log_fd >= 0) {
++                    (void) close(u->log_fd);
++                }
++                *u = units[--n_units];
++                continue;
++            }
++            u->loaded = parse_unit(u);
++            i++;
++        }
++        load_all();
++        reply(fd, "ok");
++        return;
++    }
++    if (strcmp(verb, "start-target") == 0) {
++        for (int i = 0; i < n_units; i++) {
++            if (is_enabled(&units[i])) {
++                request_start(&units[i]);
++            }
++        }
++        process_pending();
++        reply(fd, "ok");
++        return;
++    }
++    if ((strcmp(verb, "reset-failed") == 0) && (arg == NULL)) {
++        for (int i = 0; i < n_units; i++) {
++            reset_failed(&units[i]);
++        }
++        reply(fd, "ok");
++        return;
++    }
++    if (strcmp(verb, "link") == 0) {
++        if (arg == NULL) {
++            reply(fd, "err missing path");
++            return;
++        }
++        cmd_link(fd, arg);
++        return;
++    }
++
++    if (!valid_unit_name(arg)) {
++        reply(fd, "err invalid unit name");
++        return;
++    }
++    Unit *u = find_unit(arg);
++    if (u == NULL) {
++        if ((strcmp(verb, "stop") == 0) || (strcmp(verb, "disable") == 0)
++            || (strcmp(verb, "reset-failed") == 0)) {
++            // Nothing to do for a unit that does not exist, as with systemd
++            // when the unit file has already been removed.
++            reply(fd, "ok");
++            return;
++        }
++        reply(fd, "err unit %s not found", arg);
++        return;
++    }
++
++    if (strcmp(verb, "show") == 0) {
++        char line_out[NAME_LEN + 96];
++        format_unit(u, line_out, sizeof(line_out));
++        reply(fd, "ok %s", line_out);
++    } else if (strcmp(verb, "start") == 0) {
++        request_start(u);
++        process_pending();
++        reply(fd, "ok");
++    } else if (strcmp(verb, "stop") == 0) {
++        request_stop(u);
++        reply(fd, "ok");
++    } else if (strcmp(verb, "restart") == 0) {
++        if (u->pid > 0) {
++            u->restart_after_stop = true;
++            request_stop(u);
++        } else {
++            if (u->state == S_ACTIVE) {
++                set_state(u, S_INACTIVE);
++            }
++            request_start(u);
++            process_pending();
++        }
++        reply(fd, "ok");
++    } else if (strcmp(verb, "reset-failed") == 0) {
++        reset_failed(u);
++        reply(fd, "ok");
++    } else if (strcmp(verb, "enable") == 0) {
++        cmd_enable(fd, u, true);
++    } else if (strcmp(verb, "disable") == 0) {
++        cmd_enable(fd, u, false);
++    } else if (strcmp(verb, "notify") == 0) {
++        // Equivalent of systemd-notify --ready|--reloading|--stopping,
++        // issued by gghealthd for components reporting their state.
++        char *what = strtok(NULL, " ");
++        if (what == NULL) {
++            reply(fd, "err missing notification");
++            return;
++        }
++        if ((strcmp(what, "READY") == 0) || (strcmp(what, "RELOADING") == 0)) {
++            if ((u->state == S_ACTIVATING) && (u->pid > 0)) {
++                set_state(u, S_ACTIVE);
++            }
++        } else if (strcmp(what, "STOPPING") == 0) {
++            if (u->pid > 0) {
++                set_state(u, S_DEACTIVATING);
++            }
++        }
++        reply(fd, "ok");
++    } else {
++        reply(fd, "err unknown verb %s", verb);
++    }
++}
++
++static int open_listener(void) {
++    (void) unlink(GGL_SVC_SOCKET);
++    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
++    if (fd < 0) {
++        return -1;
++    }
++    struct sockaddr_un addr = { .sun_family = AF_UNIX };
++    strncpy(addr.sun_path, GGL_SVC_SOCKET, sizeof(addr.sun_path) - 1);
++    // Anyone may connect (ggipcd runs as ggcore and asks "whois"); requests
++    // that change state are checked against the peer's uid.
++    mode_t old = umask(0011);
++    int ret = bind(fd, (struct sockaddr *) &addr, sizeof(addr));
++    (void) umask(old);
++    if ((ret != 0) || (listen(fd, 16) != 0)) {
++        (void) close(fd);
++        return -1;
++    }
++    return fd;
++}
++
++static void on_signal(int sig) {
++    (void) sig;
++    terminate = 1;
++}
++
++static void stop_all(void) {
++    for (int i = 0; i < n_units; i++) {
++        units[i].start_pending = false;
++        units[i].restart_at_ms = 0;
++        if (units[i].pid > 0) {
++            units[i].stop_requested = true;
++            (void) kill(-units[i].pid, SIGTERM);
++        }
++    }
++    uint64_t deadline = now_ms() + STOP_TIMEOUT_MS;
++    while (now_ms() < deadline) {
++        bool any = false;
++        reap_children();
++        for (int i = 0; i < n_units; i++) {
++            any = any || (units[i].pid > 0);
++        }
++        if (!any) {
++            return;
++        }
++        (void) usleep(100000);
++    }
++    for (int i = 0; i < n_units; i++) {
++        if (units[i].pid > 0) {
++            (void) kill(-units[i].pid, SIGKILL);
++        }
++    }
++}
++
++int main(void) {
++    openlog("ggl-svcd", LOG_NDELAY, LOG_DAEMON);
++    (void) signal(SIGPIPE, SIG_IGN);
++    struct sigaction sa = { .sa_handler = on_signal };
++    (void) sigaction(SIGTERM, &sa, NULL);
++    (void) sigaction(SIGINT, &sa, NULL);
++
++    (void) mkdir(STATE_DIR, 0700);
++    (void) mkdir(STATE_DIR "/links", 0700);
++    (void) mkdir(STATE_DIR "/enabled", 0700);
++
++    int listener = open_listener();
++    if (listener < 0) {
++        logmsg("cannot listen on %s: %s", GGL_SVC_SOCKET, strerror(errno));
++        return 1;
++    }
++
++    load_all();
++    // Boot: start everything that is enabled, like greengrass-lite.target.
++    for (int i = 0; i < n_units; i++) {
++        if (is_enabled(&units[i])) {
++            request_start(&units[i]);
++        }
++    }
++    logmsg("managing %d units", n_units);
++
++    while (!terminate) {
++        reap_children();
++        process_timers();
++        process_pending();
++
++        struct pollfd pfds[MAX_UNITS + 1];
++        Unit *owners[MAX_UNITS + 1];
++        nfds_t nfds = 0;
++        pfds[nfds] = (struct pollfd) { .fd = listener, .events = POLLIN };
++        owners[nfds++] = NULL;
++        for (int i = 0; i < n_units; i++) {
++            if (units[i].log_fd >= 0) {
++                pfds[nfds] = (struct pollfd) { .fd = units[i].log_fd,
++                                               .events = POLLIN };
++                owners[nfds++] = &units[i];
++            }
++        }
++        int ret = poll(pfds, nfds, 250);
++        if (ret <= 0) {
++            continue;
++        }
++        for (nfds_t i = 1; i < nfds; i++) {
++            if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
++                drain_log(owners[i]);
++            }
++        }
++        if (!(pfds[0].revents & POLLIN)) {
++            continue;
++        }
++        int client = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
++        if (client < 0) {
++            continue;
++        }
++        // Requests are a single short line; bound the wait for it.
++        struct timeval tv = { .tv_sec = 2 };
++        (void) setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++        char line[768];
++        if (ggl_svc_read_line(client, line, sizeof(line)) < 0) {
++            (void) close(client);
++            continue;
++        }
++        struct ucred cred = { 0 };
++        socklen_t cred_len = sizeof(cred);
++        uid_t peer_uid = (uid_t) -1;
++        if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len)
++            == 0) {
++            peer_uid = cred.uid;
++        }
++        int watchers_before = n_watchers;
++        handle_request(client, line, peer_uid);
++        if (n_watchers == watchers_before) {
++            (void) close(client);
++        }
++    }
++
++    logmsg("stopping all units");
++    stop_all();
++    (void) unlink(GGL_SVC_SOCKET);
++    return 0;
++}
+diff --git a/modules/ggl-svc/bin/systemctl.c b/modules/ggl-svc/bin/systemctl.c
+new file mode 100644
+index 0000000..e400300
+--- /dev/null
++++ b/modules/ggl-svc/bin/systemctl.c
+@@ -0,0 +1,120 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++// systemctl for the systemd-free portable core: forwards the subset of
++// commands ggdeploymentd issues to ggl-svcd.
++
++#include <ggl/svc.h>
++#include <string.h>
++#include <unistd.h>
++#include <stdio.h>
++
++static int call(const char *verb, const char *arg) {
++    char request[768];
++    char resp[1024];
++    if (arg != NULL) {
++        (void) snprintf(request, sizeof(request), "%s %s", verb, arg);
++    } else {
++        (void) snprintf(request, sizeof(request), "%s", verb);
++    }
++    int ret = ggl_svc_call(request, resp, sizeof(resp));
++    if (ret < 0) {
++        perror("systemctl: cannot reach ggl-svcd");
++        return 1;
++    }
++    if (resp[0] != '\0') {
++        printf("%s\n", resp);
++    }
++    return ret;
++}
++
++// systemd accepts a unit file path (enable links it first) and a unit name
++// without the .service suffix; ggl-svcd only takes unit names.
++static const char *unit_arg(
++    const char *cmd, const char *arg, char *buf, size_t len
++) {
++    const char *base = strrchr(arg, '/');
++    if (base != NULL) {
++        if (strcmp(cmd, "enable") == 0) {
++            (void) call("link", arg);
++        }
++        arg = base + 1;
++    }
++    if (strchr(arg, '.') != NULL) {
++        const char *dot = strrchr(arg, '.');
++        if ((strcmp(dot, ".service") == 0) || (strcmp(dot, ".target") == 0)) {
++            return arg;
++        }
++    }
++    (void) snprintf(buf, len, "%s.service", arg);
++    return buf;
++}
++
++int main(int argc, char **argv) {
++    int i = 1;
++    while ((i < argc) && (argv[i][0] == '-')) {
++        // --no-block, --quiet, ...: ggl-svcd never blocks on start.
++        i++;
++    }
++    if (i >= argc) {
++        fprintf(stderr, "usage: systemctl <command> [unit|path ...]\n");
++        return 2;
++    }
++    const char *cmd = argv[i++];
++
++    if (strcmp(cmd, "reboot") == 0) {
++        execl("/sbin/reboot", "reboot", (char *) NULL);
++        perror("systemctl: reboot");
++        return 1;
++    }
++    if (strcmp(cmd, "daemon-reload") == 0) {
++        return call("daemon-reload", NULL);
++    }
++    if ((strcmp(cmd, "reset-failed") == 0) && (i >= argc)) {
++        return call("reset-failed", NULL);
++    }
++    if ((strcmp(cmd, "start") == 0) && (i < argc)
++        && (strcmp(argv[i], "greengrass-lite.target") == 0)) {
++        return call("start-target", NULL);
++    }
++
++    static const char *const per_unit[]
++        = { "start",  "stop",    "restart", "reset-failed", "link",
++            "enable", "disable", "show",    "is-active" };
++    for (size_t v = 0; v < sizeof(per_unit) / sizeof(per_unit[0]); v++) {
++        if (strcmp(cmd, per_unit[v]) != 0) {
++            continue;
++        }
++        if (i >= argc) {
++            fprintf(stderr, "systemctl %s: missing argument\n", cmd);
++            return 2;
++        }
++        int status = 0;
++        for (; i < argc; i++) {
++            char name[512];
++            const char *arg = argv[i];
++            if (strcmp(cmd, "link") != 0) {
++                arg = unit_arg(cmd, argv[i], name, sizeof(name));
++            }
++            if (strcmp(cmd, "is-active") == 0) {
++                char resp[512];
++                char request[512];
++                (void) snprintf(request, sizeof(request), "show %s", arg);
++                if (ggl_svc_call(request, resp, sizeof(resp)) != 0) {
++                    return 3;
++                }
++                char state[32] = "";
++                (void) sscanf(resp, "%*s %31s", state);
++                printf("%s\n", state);
++                status |= (strcmp(state, "active") == 0) ? 0 : 3;
++                continue;
++            }
++            status |= call(cmd, arg);
++        }
++        return status;
++    }
++
++    fprintf(stderr, "systemctl: unsupported command %s\n", cmd);
++    return 1;
++}
+diff --git a/modules/ggl-svc/include/ggl/svc.h b/modules/ggl-svc/include/ggl/svc.h
+new file mode 100644
+index 0000000..3eb987d
+--- /dev/null
++++ b/modules/ggl-svc/include/ggl/svc.h
+@@ -0,0 +1,39 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++#ifndef GGL_SVC_H
++#define GGL_SVC_H
++
++// Client side of ggl-svcd, the service manager that stands in for systemd
++// in the systemd-free portable core (GGL_PORTABLE_CORE).
++//
++// Protocol: one request line, one response line, over a Unix stream socket.
++//   request:  <verb> [arg ...]\n
++//   response: ok [payload]\n | err <message>\n
++// Verbs: start, stop, restart, reset-failed, link, enable, disable,
++// daemon-reload, start-target, show, whois, notify, watch. "show <unit>"
++// answers "ok <unit> <ActiveState> <Result> <NRestarts> <InactiveEnterUsec>";
++// "watch" answers "ok" and then streams one line in the same format for
++// every ActiveState change; "whois <pid>" answers "ok <unit>" for the unit
++// the process belongs to. Only show and whois are accepted from non-root
++// peers.
++
++#include <stddef.h>
++
++// Outside /run/greengrass, which belongs to the core daemons' user.
++#define GGL_SVC_SOCKET "/run/ggl-svc.sock"
++
++/// Connect to ggl-svcd. Returns a socket fd, or -1 with errno set.
++int ggl_svc_connect(void);
++
++/// Send one request (without trailing newline) and read the response line
++/// into resp (NUL-terminated, without newline). Returns 0 for "ok", 1 for
++/// "err", -1 on a transport error.
++int ggl_svc_call(const char *request, char *resp, size_t resp_len);
++
++/// Read one newline-terminated line from fd into buf (NUL-terminated,
++/// without newline). Returns the line length, or -1 on EOF/error.
++int ggl_svc_read_line(int fd, char *buf, size_t len);
++
++#endif
+diff --git a/modules/ggl-svc/src/client.c b/modules/ggl-svc/src/client.c
+new file mode 100644
+index 0000000..a441488
+--- /dev/null
++++ b/modules/ggl-svc/src/client.c
+@@ -0,0 +1,106 @@
++// aws-greengrass-lite - AWS IoT Greengrass runtime for constrained devices
++// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++#include <errno.h>
++#include <ggl/svc.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++int ggl_svc_connect(void) {
++    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
++    if (fd < 0) {
++        return -1;
++    }
++    struct sockaddr_un addr = { .sun_family = AF_UNIX };
++    strncpy(addr.sun_path, GGL_SVC_SOCKET, sizeof(addr.sun_path) - 1);
++    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
++        int saved = errno;
++        (void) close(fd);
++        errno = saved;
++        return -1;
++    }
++    return fd;
++}
++
++int ggl_svc_read_line(int fd, char *buf, size_t len) {
++    size_t used = 0;
++    while (used + 1 < len) {
++        char c;
++        ssize_t n = read(fd, &c, 1);
++        if (n < 0 && errno == EINTR) {
++            continue;
++        }
++        if (n <= 0) {
++            return -1;
++        }
++        if (c == '\n') {
++            break;
++        }
++        buf[used++] = c;
++    }
++    buf[used] = '\0';
++    return (int) used;
++}
++
++static int write_all(int fd, const char *data, size_t len) {
++    while (len > 0) {
++        ssize_t n = write(fd, data, len);
++        if (n < 0 && errno == EINTR) {
++            continue;
++        }
++        if (n <= 0) {
++            return -1;
++        }
++        data += n;
++        len -= (size_t) n;
++    }
++    return 0;
++}
++
++int ggl_svc_call(const char *request, char *resp, size_t resp_len) {
++    int fd = ggl_svc_connect();
++    if (fd < 0) {
++        return -1;
++    }
++    char line[1024];
++    size_t req_len = strlen(request);
++    if (req_len + 2 > sizeof(line)) {
++        (void) close(fd);
++        errno = EMSGSIZE;
++        return -1;
++    }
++    memcpy(line, request, req_len);
++    line[req_len] = '\n';
++    int ret = write_all(fd, line, req_len + 1);
++    if (ret == 0) {
++        ret = ggl_svc_read_line(fd, line, sizeof(line));
++    }
++    (void) close(fd);
++    if (ret < 0) {
++        return -1;
++    }
++
++    int status;
++    const char *payload;
++    if (strncmp(line, "ok", 2) == 0) {
++        status = 0;
++        payload = line + 2;
++    } else if (strncmp(line, "err", 3) == 0) {
++        status = 1;
++        payload = line + 3;
++    } else {
++        errno = EPROTO;
++        return -1;
++    }
++    while (*payload == ' ') {
++        payload++;
++    }
++    if ((resp != NULL) && (resp_len > 0)) {
++        strncpy(resp, payload, resp_len - 1);
++        resp[resp_len - 1] = '\0';
++    }
++    return status;
++}
+diff --git a/modules/ggl-svc/units/ggl.aws.greengrass.TokenExchangeService.service b/modules/ggl-svc/units/ggl.aws.greengrass.TokenExchangeService.service
+new file mode 100644
+index 0000000..cef0ecf
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.aws.greengrass.TokenExchangeService.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=Token exchange service HTTP server
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service ggl.core.tesd.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/tes-serverd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
+diff --git a/modules/ggl-svc/units/ggl.core.gg-fleet-statusd.service b/modules/ggl-svc/units/ggl.core.gg-fleet-statusd.service
+new file mode 100644
+index 0000000..6eecbed
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.gg-fleet-statusd.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=Greengrass fleet status daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service ggl.core.iotcored.service ggl.core.gghealthd.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/gg-fleet-statusd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/gg_fleet_status
+diff --git a/modules/ggl-svc/units/ggl.core.ggconfigd.service b/modules/ggl-svc/units/ggl.core.ggconfigd.service
+new file mode 100644
+index 0000000..1bb82b3
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.ggconfigd.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=core-bus config interface daemon
++StartLimitBurst=1000
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/ggconfigd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/gg_config
+diff --git a/modules/ggl-svc/units/ggl.core.ggdeploymentd.service b/modules/ggl-svc/units/ggl.core.ggdeploymentd.service
+new file mode 100644
+index 0000000..3a8cd73
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.ggdeploymentd.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=Greengrass deployment daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service ggl.core.iotcored.service ggl.core.gghealthd.service ggl.core.tesd.service
++
++[Service]
++Type=exec
++User=root
++Group=ggcore
++ExecStart=/usr/bin/ggdeploymentd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/gg_deployment
+diff --git a/modules/ggl-svc/units/ggl.core.gghealthd.service b/modules/ggl-svc/units/ggl.core.gghealthd.service
+new file mode 100644
+index 0000000..3320d73
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.gghealthd.service
+@@ -0,0 +1,16 @@
++[Unit]
++Description=Greengrass component health daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service
++
++[Service]
++Type=exec
++# As ggdeploymentd: root, but its core-bus socket must be reachable by the
++# ggcore daemons (gg-fleet-statusd, ggipcd).
++User=root
++Group=ggcore
++ExecStart=/usr/bin/gghealthd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/gg_health
+diff --git a/modules/ggl-svc/units/ggl.core.ggipcd.service b/modules/ggl-svc/units/ggl.core.ggipcd.service
+new file mode 100644
+index 0000000..96933ba
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.ggipcd.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=Greengrass IPC daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service ggl.core.ggpubsubd.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/ggipcd -s /var/lib/greengrass/gg-ipc.socket
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/var/lib/greengrass/gg-ipc.socket
+diff --git a/modules/ggl-svc/units/ggl.core.ggpubsubd.service b/modules/ggl-svc/units/ggl.core.ggpubsubd.service
+new file mode 100644
+index 0000000..ccbb25a
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.ggpubsubd.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=core-bus pub/sub daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/ggpubsubd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/gg_pubsub
+diff --git a/modules/ggl-svc/units/ggl.core.iotcored.service b/modules/ggl-svc/units/ggl.core.iotcored.service
+new file mode 100644
+index 0000000..08dab6c
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.iotcored.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=AWS IoT Core MQTT daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/iotcored
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/aws_iot_mqtt
+diff --git a/modules/ggl-svc/units/ggl.core.tesd.service b/modules/ggl-svc/units/ggl.core.tesd.service
+new file mode 100644
+index 0000000..c627aa5
+--- /dev/null
++++ b/modules/ggl-svc/units/ggl.core.tesd.service
+@@ -0,0 +1,14 @@
++[Unit]
++Description=Token exchange service daemon
++StartLimitBurst=1000
++After=ggl.core.ggconfigd.service ggl.core.iotcored.service
++
++[Service]
++Type=exec
++User=ggcore
++Group=ggcore
++ExecStart=/usr/bin/tesd
++WorkingDirectory=/var/lib/greengrass
++Restart=always
++RestartSec=1
++X-GGL-ReadySocket=/run/greengrass/aws_iot_tes

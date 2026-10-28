@@ -1,0 +1,9 @@
+config BR2_PACKAGE_ESP32S31_GGL_HELLO
+	bool "esp32s31-ggl-hello"
+	depends on BR2_PACKAGE_AWS_GREENGRASS_LITE
+	help
+	  Native Greengrass demo component
+	  (com.espressif.esp32s31.Hello): IPC configuration, local
+	  pub/sub, an AWS IoT Core round trip and a periodic
+	  heartbeat. Installs /usr/bin/esp32s31-ggl-hello and its
+	  recipe under /usr/share/esp32s31-ggl-hello.

@@ -1,0 +1,31 @@
+config BR2_PACKAGE_AWS_GREENGRASS_LITE
+	bool "aws-greengrass-lite"
+	depends on BR2_USE_MMU # fork()
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_USE_WCHAR # util-linux libuuid
+	select BR2_PACKAGE_OPENSSL
+	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_SQLITE
+	select BR2_PACKAGE_LIBYAML
+	select BR2_PACKAGE_LIBEVENT
+	select BR2_PACKAGE_LIBURIPARSER
+	select BR2_PACKAGE_CA_CERTIFICATES
+	select BR2_PACKAGE_UTIL_LINUX
+	select BR2_PACKAGE_UTIL_LINUX_LIBUUID
+	select BR2_PACKAGE_LIBZIP
+	select BR2_PACKAGE_ARGP_STANDALONE if !BR2_TOOLCHAIN_USES_GLIBC
+	help
+	  AWS IoT Greengrass nucleus lite.
+
+	  With systemd as init system the upstream service units are
+	  installed and enabled. Without systemd the nucleus is built
+	  with GGL_PORTABLE_CORE: ggl-svcd, a small service manager,
+	  runs the core daemons and the units generated for deployed
+	  components, and stands in for systemctl and systemd's D-Bus
+	  API.
+
+	  https://github.com/aws-greengrass/aws-greengrass-lite
+
+comment "aws-greengrass-lite needs a toolchain w/ threads, wchar"
+	depends on BR2_USE_MMU
+	depends on !BR2_TOOLCHAIN_HAS_THREADS || !BR2_USE_WCHAR

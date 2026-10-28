@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# AWS IoT rejects TLS from a clock that still reads 1970, so set the time
+# once (blocking, bounded) before Greengrass starts, then keep it in sync.
+
+NTP_SERVER=${NTP_SERVER:-pool.ntp.org}
+
+case "$1" in
+start)
+	printf 'Setting clock from %s: ' "$NTP_SERVER"
+	tries=0
+	until ntpd -n -q -p "$NTP_SERVER" >/dev/null 2>&1; do
+		tries=$((tries + 1))
+		if [ "$tries" -ge 10 ]; then
+			echo "FAIL"
+			break
+		fi
+		sleep 2
+	done
+	[ "$tries" -lt 10 ] && date -u '+%Y-%m-%dT%H:%M:%SZ'
+	start-stop-daemon -S -q -b -m -p /run/ntpd.pid -x /usr/sbin/ntpd -- \
+		-n -p "$NTP_SERVER"
+	;;
+stop)
+	start-stop-daemon -K -q -p /run/ntpd.pid
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+*)
+	echo "usage: $0 {start|stop|restart}" >&2
+	exit 1
+	;;
+esac

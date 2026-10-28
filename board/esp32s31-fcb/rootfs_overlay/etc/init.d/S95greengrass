@@ -1,0 +1,61 @@
+#!/bin/sh
+#
+# Greengrass Lite without systemd: ggl-svcd runs the core daemons (units in
+# /usr/lib/ggl-svc) and every component unit a deployment linked and
+# enabled, and answers the systemctl calls ggdeploymentd makes. All output
+# goes to syslog: grep <unit> /var/log/messages.
+
+GG_CONF=/etc/greengrass
+PIDFILE=/run/ggl-svcd.pid
+
+case "$1" in
+start)
+	if [ ! -f "$GG_CONF/config.yaml" ]; then
+		echo "Greengrass: $GG_CONF/config.yaml missing, not starting" >&2
+		exit 0
+	fi
+	pid=$(cat "$PIDFILE" 2>/dev/null)
+	if [ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ggl-svcd ]; then
+		echo "Greengrass Lite already running (ggl-svcd $pid)"
+		exit 0
+	fi
+	printf 'Starting Greengrass Lite: '
+	# The core daemons run as ggcore and create their sockets here.
+	install -d -o ggcore -g ggcore -m 0755 /run/greengrass
+	install -d -o ggcore -g ggcore -m 0755 /var/lib/greengrass
+	# ggl-svcd and every unit log to syslog (/var/log/messages).
+	/usr/bin/ggl-svcd </dev/null >/dev/null 2>&1 &
+	echo $! >"$PIDFILE"
+	echo "OK"
+	;;
+stop)
+	printf 'Stopping Greengrass Lite: '
+	# ggl-svcd stops every unit before it exits. Match the process by name:
+	# its executable path no longer matches once the file was replaced.
+	pid=$(cat "$PIDFILE" 2>/dev/null)
+	if [ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ggl-svcd ]; then
+		kill "$pid"
+		tries=150
+		while [ -d "/proc/$pid" ] && [ "$tries" -gt 0 ]; do
+			usleep 100000
+			tries=$((tries - 1))
+		done
+	fi
+	rm -f "$PIDFILE"
+	echo "OK"
+	;;
+restart)
+	"$0" stop
+	"$0" start
+	;;
+status)
+	for unit in /usr/lib/ggl-svc/*.service /var/lib/greengrass/svc/links/*; do
+		[ -e "$unit" ] || continue
+		systemctl show "${unit##*/}"
+	done
+	;;
+*)
+	echo "usage: $0 {start|stop|restart|status}" >&2
+	exit 1
+	;;
+esac

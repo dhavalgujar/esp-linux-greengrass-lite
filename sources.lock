@@ -1,0 +1,9 @@
+# Pinned public sources. scripts/fetch-sources.sh checks these out (depth 1)
+# into $S31_WORK/deps. The kernel, U-Boot, OpenSBI and Greengrass Lite pins
+# live in the defconfigs and the package .mk, where Buildroot fetches them.
+
+BUILDROOT_URL=https://gitlab.com/buildroot.org/buildroot.git
+BUILDROOT_REV=0a9b75673ad0bd68d913cdfcb55676a44e448159 # 2025.02.19+
+
+ESP_BUILDROOT_EXTERNAL_URL=https://github.com/espressif/esp-buildroot-external.git
+ESP_BUILDROOT_EXTERNAL_REV=a652ea95343201b592358cc4c477cbdda4f90f5b # buildroot/v2025.02-esp32s31

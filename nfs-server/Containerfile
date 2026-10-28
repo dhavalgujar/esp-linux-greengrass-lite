@@ -1,0 +1,13 @@
+# Kernel NFSv3 server for the development NFS root. Runs privileged on the
+# host network: it drives the host kernel's nfsd.
+FROM ubuntu:24.04
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        nfs-kernel-server rpcbind \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY entrypoint.sh /usr/local/sbin/esp32s31-nfs-entrypoint
+RUN chmod 0755 /usr/local/sbin/esp32s31-nfs-entrypoint
+
+ENTRYPOINT ["/usr/local/sbin/esp32s31-nfs-entrypoint"]

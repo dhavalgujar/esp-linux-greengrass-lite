@@ -1,0 +1,2 @@
+source "$BR2_EXTERNAL_ESP32S31_GGL_PATH/package/aws-greengrass-lite/Config.in"
+source "$BR2_EXTERNAL_ESP32S31_GGL_PATH/package/esp32s31-ggl-hello/Config.in"

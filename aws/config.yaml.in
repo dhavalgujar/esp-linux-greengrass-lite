@@ -1,0 +1,21 @@
+---
+system:
+  privateKeyPath: "/var/lib/greengrass/credentials/private.pem.key"
+  certificateFilePath: "/var/lib/greengrass/credentials/device.pem.crt"
+  rootCaPath: "/var/lib/greengrass/credentials/AmazonRootCA1.pem"
+  rootPath: "/var/lib/greengrass"
+  thingName: "@THING@"
+services:
+  aws.greengrass.NucleusLite:
+    componentType: "NUCLEUS"
+    configuration:
+      awsRegion: "@REGION@"
+      iotCredEndpoint: "@CRED_ENDPOINT@"
+      iotDataEndpoint: "@DATA_ENDPOINT@"
+      iotRoleAlias: "@ROLE_ALIAS@"
+      # A string: the nucleus lite configuration schema expects one.
+      greengrassDataPlanePort: "8443"
+      runWithDefault:
+        posixUser: "gg_component:gg_component"
+      platformOverride:
+        architecture: "riscv32"

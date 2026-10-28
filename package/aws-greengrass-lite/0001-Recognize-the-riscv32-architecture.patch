@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dhaval Gujar <dhaval.gujar@espressif.com>
+Date: Thu, 29 Oct 2026 04:25:42 +0530
+Subject: [PATCH] Recognize the riscv32 architecture
+
+Map 32-bit RISC-V to "riscv32" for fleet-status reporting and recipe
+platform selection. Upstream only knows riscv64, and fleet status stops
+at its "Unknown target architecture" guard.
+
+Signed-off-by: Dhaval Gujar <dhaval.gujar@espressif.com>
+Upstream: not yet submitted (developed on the esp32s31/v2.7.0 branch of a fork)
+---
+ modules/gg-fleet-statusd/src/fleet_status_service.c | 2 ++
+ modules/ggl-recipe/src/recipe.c                     | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/modules/gg-fleet-statusd/src/fleet_status_service.c b/modules/gg-fleet-statusd/src/fleet_status_service.c
+index caef27b..af763b9 100644
+--- a/modules/gg-fleet-statusd/src/fleet_status_service.c
++++ b/modules/gg-fleet-statusd/src/fleet_status_service.c
+@@ -47,6 +47,8 @@ static const GgBuffer ARCHITECTURE =
+     GG_STR("arm");
+ #elif defined(__riscv) && (__riscv_xlen == 64)
+     GG_STR("riscv64");
++#elif defined(__riscv) && (__riscv_xlen == 32)
++    GG_STR("riscv32");
+ #else
+ #error "Unknown target architecture"
+     { 0 };
+diff --git a/modules/ggl-recipe/src/recipe.c b/modules/ggl-recipe/src/recipe.c
+index 6ce460f..d0f5308 100644
+--- a/modules/ggl-recipe/src/recipe.c
++++ b/modules/ggl-recipe/src/recipe.c
+@@ -325,6 +325,8 @@ GgBuffer get_current_architecture(void) {
+     current_arch = GG_STR("arm");
+ #elif defined(__riscv) && (__riscv_xlen == 64)
+     current_arch = GG_STR("riscv64");
++#elif defined(__riscv) && (__riscv_xlen == 32)
++    current_arch = GG_STR("riscv32");
+ #endif
+     return current_arch;
+ }
