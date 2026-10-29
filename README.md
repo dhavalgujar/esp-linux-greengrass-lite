@@ -73,8 +73,58 @@ gives Linux about 14.7 MiB. A glibc/systemd image of the same stack was
 built and booted: it thrashes before Greengrass starts and takes over 12
 minutes to reach a login (`docs/results.md`; the configuration is kept,
 reproducibly, in `docs/systemd-evaluation`). The busybox image runs the
-complete Greengrass Lite daemon set with ~5.7 MiB to spare. How the
+complete Greengrass Lite daemon set with ~5.5 MiB to spare. How the
 systemd dependencies are replaced: `docs/architecture.md`.
+
+## ggl-svc: why a purpose-built service manager
+
+`ggl-svc` (patch 0003) is not a replacement init system: busybox init
+runs the system, and `/etc/init.d/S95greengrass` starts `ggl-svcd`, which
+runs only Greengrass's units. It implements the part of systemd that
+Greengrass Lite depends on, and nothing else:
+
+1. a `systemctl` that `ggdeploymentd` drives (`link`, `enable`,
+   `start --no-block`, `stop`, `disable`, `daemon-reload`,
+   `reset-failed`, `reboot`);
+2. systemd unit files generated at deployment time by `recipe2unit`
+   (`Type=oneshot|notify|exec`, `RemainAfterExit`, `Restart`, start
+   limits, `After=`/`BindsTo=`, `User=`), read as they are;
+3. the unit state `gghealthd` turns into lifecycle states (ActiveState,
+   Result, NRestarts, inactive timestamp, change notifications), which
+   decide between RUNNING, ERRORED and BROKEN;
+4. which component a process belongs to, which IPC authorization relies
+   on (`sd_pid_get_unit` upstream; a cgroup per unit here);
+5. `systemd-notify`, which every startup phase script calls.
+
+Existing supervisors were considered:
+
+| | In Buildroot | What it would still leave to custom code |
+| --- | --- | --- |
+| busybox init, runit-style `runsv` | yes | almost everything: ordering, oneshot/remain-active units, readiness, start limits, restart counts, process grouping |
+| s6 / s6-rc | yes | s6-rc compiles its service set ahead of time, which units created by deployments do not fit; no Result, restart counter or start-limit model |
+| OpenRC | yes, as the system init | replaces busybox init; no notification or unit state model |
+| dinit | no | the closest fit (dependencies, restart limits, readiness, cgroups), but it would need packaging, a unit translator and its own state mapping |
+| supervisor, monit | yes | Python, or polling: too heavy, or the wrong model |
+
+With any of them, items 1, 3, 4 and 5 stay custom: a `systemctl`
+translating systemd units, a `gghealthd` backend and the IPC identity
+lookup. That is about half of `ggl-svc`. The other half (spawning,
+restarts, timeouts, ordering, cgroups) is what an existing supervisor
+could take over, and the translation would then have to rebuild the
+parts it lacks. So `ggl-svc` implements both halves directly, against
+systemd's documented semantics: a 34 KB binary using ~140 kB of RAM, about
+1,600 lines of C in the daemon (2,850 lines in the patch, with the
+front ends and backends).
+
+The cost is that this is security-relevant code maintained here, not
+upstream. It has had two independent reviews (findings and fixes in
+`docs/results.md`), and `scripts/board-test.sh` exercises it on every run.
+On a board with enough memory for systemd (32 MiB, as the July proof
+of this stack showed), upstream's systemd build would need no ggl-svc.
+Of the source changes it would keep patches 0001 and 0004 and the
+OpenSBI reboot fix, plus systemd's own requirements: its kernel options
+(`docs/systemd-evaluation/linux-systemd.fragment`) and a `/run` large
+enough for `systemctl daemon-reload`, which refuses below 16 MiB free.
 
 ## Development setup: NFS root
 
