@@ -29,7 +29,10 @@ BR2_TARGET_GENERIC_HOSTNAME="esp32s31-ggl"
 BR2_TARGET_GENERIC_ISSUE="ESP32-S31 Greengrass Lite (portable core)"
 # BR2_TARGET_GENERIC_GETTY is not set
 BR2_SYSTEM_DHCP=""
-# Hashes for the pinned kernel, U-Boot, OpenSBI and toolchain archives.
+# Every download is hash-checked: Buildroot's own packages, ours, and (in
+# the global patch dir) the pinned kernel, U-Boot, OpenSBI, toolchain and
+# esp-linux-bsp archives.
+BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/patches"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/rootfs_overlay"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ESP_LINUX_BSP_PATH)/board/espressif/esp32s31/post-image.sh"

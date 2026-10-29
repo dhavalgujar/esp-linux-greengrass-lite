@@ -1,0 +1,3 @@
+# Locally computed (esp-buildroot-external fetches the integration/v1.0-esp32s31
+# branch; a mismatch means that branch moved)
+sha256  dc2d8e72672b2b17d23d821bf7573c854e0cd9c263d4188890424779f451b638  esp-linux-bsp-integration_v1.0-esp32s31-git4.tar.gz

@@ -15,9 +15,10 @@ A fresh clone of this repository builds into an empty work area in 15
 minutes on a 32-core workstation (downloads cached and hash-checked); the
 resulting Greengrass binaries (`ggl-svcd`, `systemctl`, `gghealthd`,
 `ggipcd`, `ggdeploymentd`, `iotcored`, `esp32s31-ggl-hello`) are
-bit-identical to the ones validated below. The only download without a
-hash is `esp-linux-bsp`, which esp-buildroot-external fetches by branch
-name, so no fixed hash can exist for it.
+bit-identical to the ones validated below. Every download (80 files) is
+hash-checked with `BR2_DOWNLOAD_FORCE_CHECK_HASHES`; `esp-linux-bsp` is
+fetched by esp-buildroot-external from a branch, so its hash fails the
+build if that branch moves.
 
 ### Cold boot (hardware reset, no manual steps)
 
