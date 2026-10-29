@@ -132,6 +132,18 @@ RAM swap (zram, `vm.swappiness=100`) and removing ifupdown's
 `network.service` did not change the outcome. The July 2026 proof of this
 stack ran on a 32 MiB board.
 
+Re-run from the committed configuration (`docs/systemd-evaluation`, built
+with `S31_DEFCONFIG`, flashed with `scripts/flash.sh`, 2026-10-29): no SSH
+within 7 minutes; the sampler on the NFS root recorded
+
+| Uptime | MemAvailable | AnonPages | `workingset_refault_file` |
+| --- | ---: | ---: | ---: |
+| 195 s | 3004 kB | 4988 kB | 25,784 |
+| 354 s | 2160 kB | 5676 kB | 55,075 |
+
+with PID 1 in uninterruptible sleep, and its own 10 s sampling interval
+stretched to 160 s.
+
 ## Public baseline (unmodified `espressif_esp32s31_function_core_board_nor_defconfig`)
 
 - Boots to a shell from NOR; `eth0` links at 100 Mb/s, DHCP and Internet
