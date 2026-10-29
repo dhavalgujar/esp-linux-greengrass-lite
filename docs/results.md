@@ -11,14 +11,36 @@ Measured 2026-10-28/29.
 Espressif's public musl toolchain, boot stack and kernel; busybox init;
 Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 
-A fresh clone of this repository builds into an empty work area in 15
-minutes on a 32-core workstation (downloads cached and hash-checked); the
-resulting Greengrass binaries (`ggl-svcd`, `systemctl`, `gghealthd`,
-`ggipcd`, `ggdeploymentd`, `iotcored`, `esp32s31-ggl-hello`) are
-bit-identical to the ones validated below. Every download (80 files) is
+A fresh clone of this repository builds into an empty work area in 18
+minutes on a 32-core workstation (downloads cached). The build is
+reproducible (`BR2_REPRODUCIBLE`): the fresh clone's `rootfs.tar` and
+`s31_full_flash.bin` are byte-for-byte identical to those of an
+independent build in another directory. Every download (80 files) is
 hash-checked with `BR2_DOWNLOAD_FORCE_CHECK_HASHES`; `esp-linux-bsp` is
 fetched by esp-buildroot-external from a branch, so its hash fails the
 build if that branch moves.
+
+### End-to-end test (`scripts/board-test.sh --cloud --reset`)
+
+On the reproducible image, flashed with `scripts/flash.sh`: 10/10 checks
+pass in about 6 minutes.
+
+```
+PASS  core units active, no restarts
+PASS  cloud removal of the demo SUCCEEDED
+PASS  local deployment of the demo, AWS IoT Core round trip
+PASS  IPC caller outside any unit refused
+PASS  failing component ends BROKEN, removal cleans up
+PASS  local deployment root removed
+PASS  cloud deployment of the demo SUCCEEDED
+PASS  core device HEALTHY, demo RUNNING (Greengrass API)
+PASS  after a cold reset: core units and deployed demo back
+PASS  core units active, no restarts (end)
+0 check(s) failed
+```
+
+Only one ESP32-S31 Function-CoreBoard was available, so the cloud checks
+cover one core device.
 
 ### Cold boot (hardware reset, no manual steps)
 
