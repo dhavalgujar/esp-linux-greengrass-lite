@@ -1,0 +1,6 @@
+[Unit]
+Wants=t-dep.service
+After=t-dep.service
+[Service]
+Type=exec
+ExecStart=/bin/sh -c 'echo main >>/tmp/t-order; exec sleep 1012'

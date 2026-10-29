@@ -26,16 +26,17 @@ kernel and flash packaging.
 esp32s31-greengrass-lite/
 ├── configs/        Buildroot defconfig
 ├── board/          kernel fragments, OpenSBI patch, root filesystem overlay
-├── package/        Greengrass Lite (v2.7.0 + 5 patches), demo component
+├── package/        Greengrass Lite (v2.7.0 + 6 patches), demo component
 ├── examples/       the demo component, as a self-contained example
 ├── scripts/        build, flash, NFS deployment, AWS setup, board tests
+├── tests/          ggl-svc: conformance with systemd, fuzzing
 ├── nfs-server/     container for the NFS root server
 ├── aws/            device configuration and IoT policy templates
 ├── docs/           architecture, results, the rejected systemd evaluation
 └── tools/          serial console helper
 ```
 
-- `package/aws-greengrass-lite`: Greengrass Lite v2.7.0 with five patches
+- `package/aws-greengrass-lite`: Greengrass Lite v2.7.0 with six patches
   (developed on the `esp32s31/v2.7.0` branch of a local fork);
 - `examples/cloud/greengrass-hello`: the demo component
   (`com.espressif.esp32s31.Hello`), laid out as the examples in
@@ -56,7 +57,7 @@ repository, applied by Buildroot at build time:
 | --- | --- | --- |
 | Recognize `riscv32` (+4 lines) | Greengrass Lite, patch 0001 | Upstream only knows riscv64: recipe platform matching and fleet status fail on this RV32 chip. |
 | Build without systemd (`GGL_PORTABLE_CORE`, 6 files) | Greengrass Lite, patch 0002 | systemd does not fit in 16 MiB (below). Only affects builds with the option on. |
-| `ggl-svc` service manager; non-systemd backends in `gghealthd` and `ggipc-auth` | Greengrass Lite, patch 0003 | Upstream runs every component as a systemd unit, reads health over D-Bus and authorizes IPC callers by their systemd cgroup; these are the places that talk to systemd. `ggl-svc` (new module) provides the same behaviour. Only built with `GGL_PORTABLE_CORE`. |
+| `ggl-svc` service manager; non-systemd backends in `gghealthd` and `ggipc-auth` | Greengrass Lite, patches 0003 and 0006 (fixes from conformance testing) | Upstream runs every component as a systemd unit, reads health over D-Bus and authorizes IPC callers by their systemd cgroup; these are the places that talk to systemd. `ggl-svc` (new module) provides the same behaviour. Only built with `GGL_PORTABLE_CORE`. |
 | Keep the IoT Jobs ID length on bootstrap resume (1 line) | Greengrass Lite, patch 0004 | Upstream bug, also on upstream main: every cloud deployment with a bootstrap step stays IN_PROGRESS forever after the device reboots. |
 | Retry the fleet provisioning certificate request until connected | Greengrass Lite, patch 0005 | Upstream waits a fixed 5 s for its MQTT connection before the request; the TLS connection takes ~11 s on this chip, so provisioning always failed. |
 | Reset the whole chip on SBI reboot | OpenSBI, `board/esp32s31-fcb/patches/opensbi` | The public firmware reset only CPU core 0, so `reboot` hung the board until EN was pulsed; Greengrass reboots the device itself to finish bootstrap steps. |
@@ -118,8 +119,18 @@ systemd's documented semantics: a 34 KB binary using ~140 kB of RAM, about
 front ends and backends).
 
 The cost is that this is security-relevant code maintained here, not
-upstream. It has had two independent reviews (findings and fixes in
-`docs/results.md`), and `scripts/board-test.sh` exercises it on every run.
+upstream. What establishes trust in it:
+
+- **conformance with systemd** (`tests/ggl-svc/conformance`): the same
+  unit scenarios, of the kinds Greengrass generates, run under systemd
+  and under ggl-svcd; every checkpoint (ActiveState, Result, NRestarts,
+  leftover processes, environment) must match. 32 of 32 do; the first
+  run found five differences, which patch 0006 fixes;
+- **fuzzing** (`tests/ggl-svc/fuzz`) of its untrusted inputs, the unit
+  file parser and the control protocol, under AddressSanitizer and
+  UndefinedBehaviorSanitizer;
+- two independent reviews (findings and fixes in `docs/results.md`), and
+  `scripts/board-test.sh`, which exercises it on the board.
 On a board with enough memory for systemd (32 MiB, as the July proof
 of this stack showed), upstream's systemd build would need no ggl-svc.
 Of the source changes it would keep patches 0001 and 0004 and the

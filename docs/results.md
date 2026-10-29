@@ -90,6 +90,42 @@ clean-up must only run for devices without storage, since a device with
 storage keeps its first certificate (removing it cut a persistent device
 off once during these tests; it was re-provisioned).
 
+### ggl-svc against systemd, and fuzzed (`tests/ggl-svc`)
+
+Conformance (`tests/ggl-svc/conformance/run.sh`): 23 scenarios of the
+units Greengrass generates, run under systemd 255 and under ggl-svcd as
+PID 1 of identical Ubuntu 24.04 containers, compared at 32 checkpoints
+(ActiveState, Result, NRestarts, leftover processes, environment).
+
+The first run differed at 5 checkpoints, all ggl-svc bugs, fixed by patch
+0006:
+
+| Found | systemd | ggl-svc before |
+| --- | --- | --- |
+| A unit stopped right after it started survived the stop until TimeoutStopSec (90 s): before exec the child still ran ggl-svcd's SIGTERM handler, and before joining its cgroup the stop did not reach it | stopped at once | stopped after 90 s, by SIGKILL |
+| A stop that needs SIGKILL | `failed timeout` | `inactive success` |
+| `systemd-notify --stopping` from a `Type=exec` unit with `NotifyAccess=all` | `deactivating` | ignored (the second review had restricted notifications to `Type=notify`; that was wrong) |
+| A run phase failing 3 times (start limit) | `failed exit-code 3` | `failed start-limit-hit 3` (no effect on Greengrass, which decides BROKEN from NRestarts) |
+| `USER`/`LOGNAME`/`HOME`/`SHELL` for `User=nobody`, a normal user, no `User=` | per systemd's rules | `HOME=/nonexistent`, no `SHELL`, all four without `User=` |
+
+After the fixes, all 32 checkpoints match, also when ggl-svc is built from
+the pinned release with the patch series.
+
+Fuzzing (`tests/ggl-svc/fuzz/run.sh 900`), libFuzzer with
+AddressSanitizer and UndefinedBehaviorSanitizer, 15 minutes per target:
+
+| Target | Inputs | Rate | Findings |
+| --- | ---: | ---: | ---: |
+| Unit file parser | 60.8 million | 67,500/s | 0 |
+| Control protocol (root and unprivileged requests against linked units) | 2.24 million | 2,500/s | 0 |
+
+Writing the harness found one hardening issue: linking a FIFO as a unit
+file would have blocked ggl-svcd (root only); it is now opened without
+blocking and rejected.
+
+The board test on the image with patch 0006, deployed over a provisioned
+device (its identity kept): 14/14.
+
 ### Independent review of ggl-svc
 
 An independent review of the fork's diff and the scripts found, among

@@ -146,12 +146,14 @@ Manifests:
         Script: "exit 1"
 EOF'
 	local_deploy -r /tmp/failtest -c com.espressif.esp32s31.FailTest=1.0.0 >/dev/null
+	# Failed after 3 restarts, which gghealthd reports as BROKEN. As under
+	# systemd, the start limit keeps the failure's Result (exit-code).
 	state=$(board 'for i in $(seq 1 30); do
 			s=$(systemctl show ggl.com.espressif.esp32s31.FailTest.service)
-			case $s in *" failed start-limit-hit 3 "*) break ;; esac
+			case $s in *" failed exit-code 3 "*) break ;; esac
 			sleep 2
 		done; echo "$s"')
-	case $state in *" failed start-limit-hit 3 "*) ;; *) return 1 ;; esac
+	case $state in *" failed exit-code 3 "*) ;; *) return 1 ;; esac
 	[ "$(local_deploy -d com.espressif.esp32s31.FailTest)" = SUCCEEDED ] || return 1
 	board '! ls /var/lib/ggl-svc/links | grep -q FailTest'
 }

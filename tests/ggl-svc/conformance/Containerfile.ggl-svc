@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+# ggl-svcd as PID 1, built from the patched source in the build context,
+# with the same userland as the systemd reference.
+FROM ubuntu:24.04 AS build
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends gcc libc6-dev && \
+	rm -rf /var/lib/apt/lists/*
+COPY ggl-svc /src
+RUN mkdir /out && \
+	cflags="-std=gnu11 -O2 -Wall -Wextra -Werror -D_GNU_SOURCE -I/src/include" && \
+	gcc $cflags -o /out/ggl-svcd /src/bin/ggl-svcd.c && \
+	gcc $cflags -o /out/systemctl /src/bin/systemctl.c /src/src/client.c && \
+	gcc $cflags -o /out/systemd-notify /src/bin/systemd-notify.c /src/src/client.c
+
+FROM ubuntu:24.04
+RUN apt-get update && \
+	apt-get install -y --no-install-recommends procps && \
+	rm -rf /var/lib/apt/lists/* && \
+	useradd -m -s /bin/sh ggtest && \
+	mkdir -p /usr/lib/ggl-svc
+COPY --from=build /out/ /usr/bin/
+CMD ["/usr/bin/ggl-svcd"]
