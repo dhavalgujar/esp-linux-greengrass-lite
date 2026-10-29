@@ -54,6 +54,9 @@ check() {
 	else
 		echo "FAIL  $name"
 		failures=$((failures + 1))
+		# /var/log is a tmpfs: show the evidence before a reset loses it.
+		board 'grep -E "ggdeploymentd|ggl-svcd: ggl\.|recipe-runner|E\[" /var/log/messages |
+			grep -v core_mqtt | tail -n 15' 2>/dev/null | sed 's/^/      /'
 	fi
 }
 
@@ -107,7 +110,7 @@ impersonation_refused() {
 }
 
 failing_component_is_broken_then_removed() {
-	board 'mkdir -p /tmp/failtest && cat >/tmp/failtest/com.espressif.esp32s31.FailTest-1.0.0.yaml <<"EOF"
+	board 'umask 022 && mkdir -p /tmp/failtest && cat >/tmp/failtest/com.espressif.esp32s31.FailTest-1.0.0.yaml <<"EOF"
 ---
 RecipeFormatVersion: "2020-01-25"
 ComponentName: "com.espressif.esp32s31.FailTest"
@@ -129,7 +132,39 @@ EOF'
 		done; echo "$s"')
 	case $state in *" failed start-limit-hit 3 "*) ;; *) return 1 ;; esac
 	[ "$(local_deploy -d com.espressif.esp32s31.FailTest)" = SUCCEEDED ] || return 1
-	board '! ls /var/lib/greengrass/svc/links | grep -q FailTest'
+	board '! ls /var/lib/ggl-svc/links | grep -q FailTest'
+}
+
+# A component with install and startup phases: exercises
+# "systemctl start --no-block" and systemd-notify (startup scripts end with
+# --ready and --stopping).
+phased_component_deploys() {
+	board 'umask 022 && mkdir -p /tmp/phasetest && cat >/tmp/phasetest/com.espressif.esp32s31.PhaseTest-1.0.0.yaml <<"EOF"
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: "com.espressif.esp32s31.PhaseTest"
+ComponentVersion: "1.0.0"
+ComponentPublisher: "Espressif"
+Manifests:
+  - Platform:
+      os: linux
+      runtime: "*"
+    Lifecycle:
+      install:
+        Script: "echo phasetest installed"
+      startup:
+        Script: "echo phasetest started"
+EOF'
+	[ "$(local_deploy -r /tmp/phasetest -c com.espressif.esp32s31.PhaseTest=1.0.0)" = SUCCEEDED ] || return 1
+	states=$(board 'systemctl show ggl.com.espressif.esp32s31.PhaseTest.install.service;
+		systemctl show ggl.com.espressif.esp32s31.PhaseTest.service')
+	# The generated install unit has RemainAfterExit=true (active once it
+	# succeeded); the startup unit must have run and then finished.
+	printf '%s\n' "$states" |
+		grep -Eq "PhaseTest\.install\.service (active|inactive) success " &&
+		printf '%s\n' "$states" |
+		grep -Eq "PhaseTest\.service inactive success [0-9]+ [1-9]" || return 1
+	[ "$(local_deploy -d com.espressif.esp32s31.PhaseTest)" = SUCCEEDED ]
 }
 
 local_root_removed() {
@@ -137,7 +172,7 @@ local_root_removed() {
 	# With --cloud the group no longer lists the demo either (see
 	# cloud_removal_succeeds), so it must be gone entirely.
 	[ "$cloud" = 1 ] || return 0
-	board '! ls /var/lib/greengrass/svc/links | grep -q Hello' &&
+	board '! ls /var/lib/ggl-svc/links | grep -q Hello' &&
 		! hello_unit_active
 }
 
@@ -195,6 +230,16 @@ comes_back_after_reset() {
 		core_units_healthy
 }
 
+# Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
+# runs as gg_component and must be able to read them (hence umask 022
+# above). Remove test components a previous, interrupted run left behind.
+for leftover in com.espressif.esp32s31.FailTest com.espressif.esp32s31.PhaseTest; do
+	if board "ls /var/lib/greengrass/packages/recipes" 2>/dev/null |
+		grep -q "^$leftover-"; then
+		local_deploy -d "$leftover" >/dev/null
+	fi
+done
+
 check "core units active, no restarts" core_units_healthy
 if [ "$cloud" = 1 ]; then
 	check "cloud removal of the demo SUCCEEDED" cloud_removal_succeeds
@@ -202,6 +247,7 @@ fi
 check "local deployment of the demo, AWS IoT Core round trip" hello_passes_after_local_deploy
 check "IPC caller outside any unit refused" impersonation_refused
 check "failing component ends BROKEN, removal cleans up" failing_component_is_broken_then_removed
+check "install and startup phases (systemd-notify) deploy" phased_component_deploys
 check "local deployment root removed" local_root_removed
 if [ "$cloud" = 1 ]; then
 	check "cloud deployment of the demo SUCCEEDED" cloud_deployment_succeeds

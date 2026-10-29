@@ -49,11 +49,15 @@ fi
 docker exec -i "$container" tar -C "$target" --overwrite \
 	$keep -xpf - <"$rootfs"
 
+# Read the ids from the tree just written through the container, so they
+# match whatever the export actually holds.
 uid_of() {
-	awk -F: -v u="$1" '$1 == u { print $3 }' "$root/etc/passwd"
+	docker exec "$container" cat "$target/etc/passwd" |
+		awk -F: -v u="$1" '$1 == u { print $3 }'
 }
 gid_of() {
-	awk -F: -v g="$1" '$1 == g { print $3 }' "$root/etc/group"
+	docker exec "$container" cat "$target/etc/group" |
+		awk -F: -v g="$1" '$1 == g { print $3 }'
 }
 ggcore_uid=$(uid_of ggcore)
 ggcore_gid=$(gid_of ggcore)

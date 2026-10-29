@@ -49,7 +49,7 @@ restart)
 	"$0" start
 	;;
 status)
-	for unit in /usr/lib/ggl-svc/*.service /var/lib/greengrass/svc/links/*; do
+	for unit in /usr/lib/ggl-svc/*.service /var/lib/ggl-svc/links/*; do
 		[ -e "$unit" ] || continue
 		systemctl show "${unit##*/}"
 	done

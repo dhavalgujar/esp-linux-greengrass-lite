@@ -22,8 +22,8 @@ build if that branch moves.
 
 ### End-to-end test (`scripts/board-test.sh --cloud --reset`)
 
-On the reproducible image, flashed with `scripts/flash.sh`: 10/10 checks
-pass in about 6 minutes.
+On the final image, after a clean deployment of the root filesystem and a
+cold boot: 11/11 checks pass in about 7 minutes.
 
 ```
 PASS  core units active, no restarts
@@ -31,6 +31,7 @@ PASS  cloud removal of the demo SUCCEEDED
 PASS  local deployment of the demo, AWS IoT Core round trip
 PASS  IPC caller outside any unit refused
 PASS  failing component ends BROKEN, removal cleans up
+PASS  install and startup phases (systemd-notify) deploy
 PASS  local deployment root removed
 PASS  cloud deployment of the demo SUCCEEDED
 PASS  core device HEALTHY, demo RUNNING (Greengrass API)
@@ -38,6 +39,31 @@ PASS  after a cold reset: core units and deployed demo back
 PASS  core units active, no restarts (end)
 0 check(s) failed
 ```
+
+### Independent review of ggl-svc
+
+An independent review of the fork's diff and the scripts found, among
+others, four high-severity problems, all fixed and covered by the checks
+above:
+
+- `systemctl start --no-block <unit>` (ggdeploymentd's form) treated
+  `--no-block` as a unit, so every deployment with an install phase
+  failed;
+- startup phases could never reach RUNNING: their scripts end with
+  `systemd-notify`, which did not exist, and notify units ignored
+  `RemainAfterExit`;
+- the unit state directory was inside `/var/lib/greengrass`, writable by
+  `ggcore`, which could have planted a unit running as root; it is now
+  root-only `/var/lib/ggl-svc`;
+- a local user could stall ggl-svcd by sending a request one byte at a
+  time; requests are now read without blocking.
+
+Also fixed: unit sessions stand in for cgroups (leftover processes are
+killed, `whois` matches by session), start/stop timeouts, start limits
+over their interval, blocking `systemctl start/stop`, a restart that could
+override a later stop, dependents of a failed core daemon waiting forever,
+links left by units that failed to load or were removed, and log draining
+that could starve the main loop.
 
 Only one ESP32-S31 Function-CoreBoard was available, so the cloud checks
 cover one core device.

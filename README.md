@@ -99,6 +99,9 @@ ggl-cli deploy -r /usr/share/esp32s31-ggl-hello \
     -c com.espressif.esp32s31.Hello=1.0.0   # local deployment
 ```
 
+Recipes given to `ggl-cli deploy -r` are copied with their file mode, and
+components run as `gg_component`: keep them world-readable.
+
 AWS prerequisites (one-time per account and region): a Token Exchange role
 and IoT role alias (`GG_ROLE_ALIAS`, default
 `ESP32S31GreengrassTokenExchangeAlias`), and a Greengrass service role
