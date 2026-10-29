@@ -11,14 +11,14 @@ Measured 2026-10-28/29.
 Espressif's public musl toolchain, boot stack and kernel; busybox init;
 Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 
-A fresh clone of this repository builds into an empty work area in 18
-minutes on an otherwise idle 32-core workstation (downloads cached; 31
-minutes on a shared, loaded one). The build is reproducible
-(`BR2_REPRODUCIBLE`): a fresh clone of commit `ba296a9` builds a
-`rootfs.tar` (`22b77b62…`) and an `s31_full_flash.bin` (`37bbe780…`)
+A fresh clone of this repository builds into an empty work area in 18–19
+minutes on a 32-core workstation (downloads cached; 31 minutes when the
+workstation was shared and loaded). The build is reproducible
+(`BR2_REPRODUCIBLE`): a fresh clone of commit `dedae3d` builds a
+`rootfs.tar` (`c82aa0c0…`) and an `s31_full_flash.bin` (`37bbe780…`)
 byte-for-byte identical to those of the incremental development build in
-another directory. Those are the images the results below were measured
-on. Every download (80 files) is
+another directory (and so did `ba296a9`, before the demo moved to
+`examples/`). The end-to-end test below ran on those images. Every download (80 files) is
 hash-checked with `BR2_DOWNLOAD_FORCE_CHECK_HASHES`; `esp-linux-bsp` is
 fetched by esp-buildroot-external from a branch, so its hash fails the
 build if that branch moves.
