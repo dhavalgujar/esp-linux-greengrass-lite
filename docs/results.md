@@ -2,9 +2,11 @@
 
 Board: ESP32-S31 Function-CoreBoard (chip MAC 30:ed:a0:ed:78:74), 16 MiB
 PSRAM, 16 MiB NOR flash, Ethernet (YT8531 PHY) at 100 Mb/s full duplex to
-an AP/router with Internet access. AWS region us-east-1, Thing
-`esp32s31-fcb-eth`. NFS root served from a workstation on the same subnet.
-Measured 2026-10-28/29.
+an AP/router with Internet access. AWS region us-east-1. Until 2026-10-29
+the board used a manually provisioned Thing, `esp32s31-fcb-eth`; since
+2026-10-30 it provisions itself as `esp32s31-greengrass-32eda0ed7875` in
+fleet `esp32s31-greengrass`. NFS root served from a workstation on the same
+subnet. Measured 2026-10-28..30.
 
 ## Shipped configuration: `esp32s31_fcb_greengrass_defconfig`
 
@@ -25,11 +27,15 @@ build if that branch moves.
 
 ### End-to-end test (`scripts/board-test.sh --cloud --reset`)
 
-On the final image, after a clean deployment of the root filesystem and a
-software reboot: 13/13 checks pass in 9 minutes.
+On the final image, after a clean deployment and a software reboot, the
+board provisioning itself at boot (fleet `esp32s31-greengrass`).
+
+With persistent storage (`/data` on the NFS server): 14/14 checks pass in
+10 minutes.
 
 ```
-PASS  core units active, no restarts
+PASS  device provisioned itself, core units active
+PASS  Thing esp32s31-greengrass-32eda0ed7875 registered in group esp32s31-greengrass
 PASS  cloud removal of the demo SUCCEEDED
 PASS  local deployment of the demo, AWS IoT Core round trip
 PASS  IPC caller outside any unit refused
@@ -40,10 +46,49 @@ PASS  cloud deployment with a bootstrap step: reboot, resume, SUCCEEDED
 PASS  cloud deployment of the demo SUCCEEDED
 PASS  test component removed from the device and the account
 PASS  core device HEALTHY, demo RUNNING (Greengrass API)
-PASS  after a cold reset: core units and deployed demo back
+PASS  after a cold reset: same device, core units and deployed demo back
 PASS  core units active, no restarts (end)
 0 check(s) failed
 ```
+
+Without storage (`nfs-deploy.sh --fresh`, `board-test.sh --fresh`):
+12/12 checks pass in 7 minutes. The bootstrap checks do not apply (a
+deployment cannot outlive the reboot it needs), and the reset brings back a
+new device.
+
+```
+PASS  device provisioned itself, core units active
+PASS  Thing esp32s31-greengrass-32eda0ed7875 registered in group esp32s31-greengrass
+PASS  cloud removal of the demo SUCCEEDED
+PASS  local deployment of the demo, AWS IoT Core round trip
+PASS  IPC caller outside any unit refused
+PASS  failing component ends BROKEN, removal cleans up
+PASS  install and startup phases (systemd-notify) deploy
+PASS  local deployment root removed
+PASS  cloud deployment of the demo SUCCEEDED
+PASS  core device HEALTHY, demo RUNNING (Greengrass API)
+PASS  after a cold reset: provisioned anew, new certificate, nothing deployed
+PASS  core units active, no restarts (end)
+0 check(s) failed
+```
+
+### Device identity and state (fleet provisioning)
+
+| | Measured |
+| --- | --- |
+| Fresh boot to provisioned and running | provisioning starts ~23 s after reset, takes 37 s; Greengrass runs as the new device at ~60 s uptime |
+| First certificate request | sent before the MQTT connection is up (it takes ~11 s): failed without patch 0005, retried 3 s later with it |
+| `/data` in RAM (`--fresh`) after provisioning | 56 KB of the 4 MiB tmpfs |
+| Persistent storage, cold reset | same certificate, the cloud-deployed demo back |
+| No storage, cold reset | a new certificate on the same Thing, nothing deployed |
+| Superseded certificates | one per fresh boot; `scripts/aws-clean-certs.sh` removed them, keeping the device's (certificate ID checked against the device's PEM) |
+| AWS resources (`scripts/aws-provision.sh`) | thing group, provisioning template and IAM role, claim policy and certificate created; token-exchange role and alias, service role reused. An unrelated `test_fleet_provisioning` template in the account was left alone |
+
+Two pitfalls found on the way: `fleet-provisioning`'s options take
+attached values only (`--template-params=JSON`, not `-p JSON`); and the
+clean-up must only run for devices without storage, since a device with
+storage keeps its first certificate (removing it cut a persistent device
+off once during these tests; it was re-provisioned).
 
 ### Independent review of ggl-svc
 

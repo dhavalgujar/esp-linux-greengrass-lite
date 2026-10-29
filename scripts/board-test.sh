@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # End-to-end checks of a running board:
 #
-#   scripts/board-test.sh <board-ip> <thing-name> [--cloud]
+#   scripts/board-test.sh <board-ip> <fleet-name> [--cloud] [--fresh]
 #       [--reset <serial-port> <chip-mac>]
+#
+# The board provisions itself into the fleet (scripts/aws-provision.sh) as
+# Thing <fleet>-<serial>, in thing group <fleet>.
 #
 #   --cloud   also deploy the demo from AWS (scripts/aws-deploy-hello.sh)
 #             and check the core device and component in the Greengrass API;
@@ -12,8 +15,13 @@
 #             makes the device reboot mid-deployment (registered in the
 #             account for the check and deleted afterwards)
 #   --reset   finally reset the board through its serial port (after
-#             checking the chip MAC) and check that everything, including
-#             the cloud-deployed demo, comes back (needs --cloud)
+#             checking the chip MAC) and check what comes back (needs
+#             --cloud): with persistent storage the same device, with the
+#             cloud-deployed demo
+#   --fresh   the board keeps its state in RAM (nfs-deploy.sh --fresh): skip
+#             the bootstrap check (a deployment cannot outlive the reboot it
+#             needs), and expect a new device after the reset: provisioned
+#             again with a new certificate, nothing deployed
 #
 #   S31_WORK      work area holding secrets/ssh (default: repo/..)
 #   ESP_ESPTOOL   esptool for --reset (default: from PATH)
@@ -23,15 +31,19 @@ set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${S31_WORK:-$(dirname -- "$repo")}
-ip=${1:?usage: $0 <board-ip> <thing-name> [--cloud] [--reset <port> <mac>]}
-thing=${2:?usage: $0 <board-ip> <thing-name> [--cloud] [--reset <port> <mac>]}
+usage="usage: $0 <board-ip> <fleet-name> [--cloud] [--fresh] [--reset <port> <mac>]"
+ip=${1:?$usage}
+fleet=${2:?$usage}
 shift 2
+group=${GG_THING_GROUP:-$fleet}
 cloud=0
+fresh=0
 reset_port=
 reset_mac=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--cloud) cloud=1; shift ;;
+	--fresh) fresh=1; shift ;;
 	--reset) reset_port=${2:?--reset <port> <mac>}; reset_mac=${3:?--reset <port> <mac>}; shift 3 ;;
 	*) echo "unknown option $1" >&2; exit 2 ;;
 	esac
@@ -208,7 +220,7 @@ aws_account() {
 # Deploys the components (JSON) to the thing group; prints the deployment.
 group_deploy() {
 	aws greengrassv2 create-deployment --region "$(aws_region)" \
-		--target-arn "arn:aws:iot:$(aws_region):$(aws_account):thinggroup/${GG_THING_GROUP:-$thing-group}" \
+		--target-arn "arn:aws:iot:$(aws_region):$(aws_account):thinggroup/$group" \
 		--deployment-name "board-test: $1" --components "$2" \
 		--query deploymentId --output text
 }
@@ -285,7 +297,7 @@ bootstrap_component_deleted() {
 }
 
 cloud_deployment_succeeds() {
-	wait_cloud_deployment "$("$repo/scripts/aws-deploy-hello.sh" "$thing" | tail -n 1)"
+	wait_cloud_deployment "$("$repo/scripts/aws-deploy-hello.sh" "$group" | tail -n 1)"
 }
 
 cloud_reports_healthy_and_running() {
@@ -298,7 +310,36 @@ cloud_reports_healthy_and_running() {
 			--output text | grep -qx RUNNING
 }
 
-comes_back_after_reset() {
+# The device's certificate, or nothing before it is provisioned.
+device_certificate() {
+	board 'cat /var/lib/greengrass/credentials/certificate.pem' 2>/dev/null |
+		sha256sum | cut -c1-16
+}
+
+# Waits until the device has provisioned itself and its core units run.
+provisioned_and_running() {
+	board 'for i in $(seq 1 120); do
+			[ -s /var/lib/greengrass/credentials/certificate.pem ] &&
+				[ "$(/etc/init.d/S95greengrass status | grep -c " active ")" -ge 9 ] &&
+				exit 0
+			sleep 5
+		done; exit 1' || return 1
+	sleep 20
+	core_units_healthy
+}
+
+# Fleet provisioning registered the Thing, in the fleet's group, with the
+# certificate the device holds.
+device_registered() {
+	[ -n "$thing" ] &&
+		aws iot list-thing-groups-for-thing --thing-name "$thing" \
+			--query 'thingGroups[].groupName' --output text | grep -qw "$group" &&
+		[ "$(aws iot list-thing-principals --thing-name "$thing" \
+			--query 'length(principals)' --output text)" -ge 1 ]
+}
+
+# Resets the board through its serial port and waits for SSH.
+cold_reset() {
 	esptool=${ESP_ESPTOOL:-esptool}
 	mac=$("$esptool" --port "$reset_port" read-mac 2>&1 |
 		sed -n 's/^MAC: *//p' | head -n 1 | tr '[:upper:]' '[:lower:]')
@@ -307,8 +348,23 @@ comes_back_after_reset() {
 		board true 2>/dev/null && break
 		sleep 2
 	done
+}
+
+# Persistent storage: the same device comes back, with what was deployed.
+comes_back_after_reset() {
+	cert0=$(device_certificate)
+	cold_reset || return 1
 	board 'for i in $(seq 1 150); do grep -q "hello: PASS" /var/log/messages && exit 0; sleep 1; done; exit 1' &&
-		core_units_healthy
+		core_units_healthy && [ "$(device_certificate)" = "$cert0" ]
+}
+
+# No storage: a new device comes back, provisioned again, nothing deployed.
+fresh_after_reset() {
+	cert0=$(device_certificate)
+	cold_reset || return 1
+	provisioned_and_running || return 1
+	[ "$(device_certificate)" != "$cert0" ] &&
+		! board 'ls /var/lib/ggl-svc/links' | grep -q Hello
 }
 
 # Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
@@ -321,8 +377,11 @@ for leftover in com.espressif.esp32s31.FailTest com.espressif.esp32s31.PhaseTest
 	fi
 done
 
-check "core units active, no restarts" core_units_healthy
+check "device provisioned itself, core units active" provisioned_and_running
+serial=$(board 'tr -d ":\n" </sys/class/net/eth0/address')
+thing=${serial:+$fleet-$serial}
 if [ "$cloud" = 1 ]; then
+	check "Thing $thing registered in group $group" device_registered
 	check "cloud removal of the demo SUCCEEDED" cloud_removal_succeeds
 fi
 check "local deployment of the demo, AWS IoT Core round trip" hello_passes_after_local_deploy
@@ -331,13 +390,19 @@ check "failing component ends BROKEN, removal cleans up" failing_component_is_br
 check "install and startup phases (systemd-notify) deploy" phased_component_deploys
 check "local deployment root removed" local_root_removed
 if [ "$cloud" = 1 ]; then
-	check "cloud deployment with a bootstrap step: reboot, resume, SUCCEEDED" cloud_bootstrap_reboot_succeeds
+	if [ "$fresh" = 0 ]; then
+		check "cloud deployment with a bootstrap step: reboot, resume, SUCCEEDED" cloud_bootstrap_reboot_succeeds
+	fi
 	check "cloud deployment of the demo SUCCEEDED" cloud_deployment_succeeds
-	check "test component removed from the device and the account" bootstrap_component_deleted
+	if [ "$fresh" = 0 ]; then
+		check "test component removed from the device and the account" bootstrap_component_deleted
+	fi
 	check "core device HEALTHY, demo RUNNING (Greengrass API)" cloud_reports_healthy_and_running
 fi
-if [ -n "$reset_port" ]; then
-	check "after a cold reset: core units and deployed demo back" comes_back_after_reset
+if [ -n "$reset_port" ] && [ "$fresh" = 0 ]; then
+	check "after a cold reset: same device, core units and deployed demo back" comes_back_after_reset
+elif [ -n "$reset_port" ]; then
+	check "after a cold reset: provisioned anew, new certificate, nothing deployed" fresh_after_reset
 fi
 check "core units active, no restarts (end)" core_units_healthy
 echo "$failures check(s) failed"

@@ -6,36 +6,71 @@
 # /usr/lib/ggl-svc) and every component unit a deployment linked and
 # enabled, and answers the systemctl calls ggdeploymentd makes. All output
 # goes to syslog: grep <unit> /var/log/messages.
+#
+# Device state lives under /data: /data/greengrass (credentials,
+# configuration database, deployed components) and /data/ggl-svc (linked and
+# enabled units), bind-mounted on /var/lib/greengrass and /var/lib/ggl-svc.
+# A board with persistent storage mounts it on /data (/etc/fstab); without
+# it, /data is a RAM file system and the device starts fresh at every boot.
+#
+# At start:
+#   - device credentials in /data/greengrass: start as that device;
+#   - otherwise, a claim certificate in /etc/greengrass/claim: provision the
+#     device with AWS IoT fleet provisioning (in the background), then start;
+#   - otherwise: do not start.
+#
+# /etc/default/greengrass may set:
+#   GGL_DATA_TMPFS_SIZE  size of the RAM /data (default 4m)
+#   GGL_SERIAL           the device's serial number for the provisioning
+#                        template (default: eth0's MAC address, hex digits)
 
 GG_CONF=/etc/greengrass
+CLAIM=$GG_CONF/claim
+CREDS=/var/lib/greengrass/credentials
 PIDFILE=/run/ggl-svcd.pid
+PROV_PIDFILE=/run/ggl-provision.pid
+GGL_DATA_TMPFS_SIZE=4m
+GGL_SERIAL=
+[ -r /etc/default/greengrass ] && . /etc/default/greengrass
 
-case "$1" in
-start)
-	if [ ! -f "$GG_CONF/config.yaml" ]; then
-		echo "Greengrass: $GG_CONF/config.yaml missing, not starting" >&2
-		exit 0
-	fi
+running() {
 	pid=$(cat "$PIDFILE" 2>/dev/null)
-	if [ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ggl-svcd ]; then
-		echo "Greengrass Lite already running (ggl-svcd $pid)"
-		exit 0
+	[ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ggl-svcd ]
+}
+
+setup_data() {
+	if ! mountpoint -q /data; then
+		mount -t tmpfs -o "mode=0755,size=$GGL_DATA_TMPFS_SIZE" tmpfs /data ||
+			return 1
 	fi
-	printf 'Starting Greengrass Lite: '
+	install -d -o ggcore -g ggcore -m 0755 /data/greengrass
+	# ggl-svcd refuses a state directory anyone but root can write.
+	install -d -o root -g root -m 0700 /data/ggl-svc
+	for dir in greengrass ggl-svc; do
+		mkdir -p "/var/lib/$dir"
+		mountpoint -q "/var/lib/$dir" ||
+			mount -o bind "/data/$dir" "/var/lib/$dir" || return 1
+	done
+}
+
+provisioned() {
+	# fleet-provisioning writes certificate.pem; a manually provisioned
+	# device has device.pem.crt.
+	[ -s "$CREDS/certificate.pem" ] || [ -s "$CREDS/device.pem.crt" ]
+}
+
+start_svcd() {
 	# The core daemons run as ggcore and create their sockets here.
 	install -d -o ggcore -g ggcore -m 0755 /run/greengrass
-	install -d -o ggcore -g ggcore -m 0755 /var/lib/greengrass
 	# ggl-svcd and every unit log to syslog (/var/log/messages).
 	/usr/bin/ggl-svcd </dev/null >/dev/null 2>&1 &
 	echo $! >"$PIDFILE"
-	echo "OK"
-	;;
-stop)
-	printf 'Stopping Greengrass Lite: '
+}
+
+stop_svcd() {
 	# ggl-svcd stops every unit before it exits. Match the process by name:
 	# its executable path no longer matches once the file was replaced.
-	pid=$(cat "$PIDFILE" 2>/dev/null)
-	if [ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ggl-svcd ]; then
+	if running; then
 		kill "$pid"
 		tries=150
 		while [ -d "/proc/$pid" ] && [ "$tries" -gt 0 ]; do
@@ -44,6 +79,86 @@ stop)
 		done
 	fi
 	rm -f "$PIDFILE"
+}
+
+# Fleet provisioning, as upstream documents it: with the core daemons
+# running (it reads and writes their configuration), fleet-provisioning
+# connects with the claim certificate, has AWS IoT sign a certificate for a
+# key generated here and register the Thing, and stores both in $CREDS.
+# The daemons are then restarted with the device's identity.
+provision() {
+	log() { logger -t ggl-provision "$*"; }
+	serial=${GGL_SERIAL:-$(tr -d ':\n' </sys/class/net/eth0/address)}
+	attempt=1
+	while :; do
+		# A socket left by the previous attempt must not count as ready.
+		rm -f /run/greengrass/gg_config
+		start_svcd
+		tries=600
+		while [ ! -S /run/greengrass/gg_config ] && [ "$tries" -gt 0 ]; do
+			usleep 200000
+			tries=$((tries - 1))
+		done
+		rm -f /run/greengrass/iotcoredfleet
+		log "provisioning serial $serial (attempt $attempt)"
+		# Its options take attached values only (--option=value).
+		timeout 180 /usr/bin/fleet-provisioning \
+			--template-params="{\"SerialNumber\":\"$serial\"}" 2>&1 |
+			logger -t ggl-provision
+		stop_svcd
+		if provisioned; then
+			log "provisioned"
+			start_svcd
+			return 0
+		fi
+		if [ "$attempt" -ge 3 ]; then
+			log "provisioning failed; Greengrass not started"
+			return 1
+		fi
+		attempt=$((attempt + 1))
+		sleep 30
+	done
+}
+
+case "$1" in
+start)
+	if [ ! -f "$GG_CONF/config.yaml" ]; then
+		echo "Greengrass: $GG_CONF/config.yaml missing, not starting" >&2
+		exit 0
+	fi
+	if running; then
+		echo "Greengrass Lite already running (ggl-svcd $pid)"
+		exit 0
+	fi
+	printf 'Starting Greengrass Lite: '
+	if ! setup_data; then
+		echo "FAIL (cannot set up /data)"
+		exit 1
+	fi
+	if provisioned; then
+		start_svcd
+		echo "OK"
+	elif [ -s "$CLAIM/claim.pem.crt" ]; then
+		provision </dev/null >/dev/null 2>&1 &
+		echo $! >"$PROV_PIDFILE"
+		echo "OK (provisioning in the background)"
+	else
+		echo "not provisioned (no credentials in $CREDS, no claim in $CLAIM)"
+	fi
+	;;
+stop)
+	printf 'Stopping Greengrass Lite: '
+	# A provisioning run in progress would start ggl-svcd again.
+	prov=$(cat "$PROV_PIDFILE" 2>/dev/null)
+	if [ -n "$prov" ] && kill -0 "$prov" 2>/dev/null; then
+		kill "$prov"
+		# fleet-provisioning stops its own MQTT client only when it exits
+		# normally.
+		pkill -f /usr/bin/fleet-provisioning
+		pkill -f 'iotcored -n iotcoredfleet'
+	fi
+	rm -f "$PROV_PIDFILE"
+	stop_svcd
 	echo "OK"
 	;;
 restart)

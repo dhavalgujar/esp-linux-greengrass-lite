@@ -91,11 +91,11 @@ Recipes given to ``ggl-cli deploy -r`` are copied with their file mode, and
 components run as ``gg_component``: keep the recipe world-readable.
 
 Cloud deployment, from the host (registers the component and deploys it to
-the thing group ``<thing>-group``):
+a thing group, such as the one devices join when they provision themselves):
 
 .. code-block:: bash
 
-   scripts/aws-deploy-hello.sh <thing-name>
+   scripts/aws-deploy-hello.sh <thing-group>
 
 Nucleus lite resolves cloud components for the platform
 ``{os: linux, architecture: riscv32, runtime: aws_nucleus_lite}``. The
@@ -113,9 +113,9 @@ The component's output is in syslog, tagged with its name:
    # grep com.espressif.esp32s31.Hello /var/log/messages
    ... com.espressif.esp32s31.Hello: hello: config message=Hello from ESP32-S31
    ... com.espressif.esp32s31.Hello: hello: local esp32s31/hello <- Hello from ESP32-S31
-   ... com.espressif.esp32s31.Hello: hello: cloud esp32s31/esp32s31-fcb-eth/hello <- Hello from ESP32-S31
+   ... com.espressif.esp32s31.Hello: hello: cloud esp32s31/esp32s31-greengrass-32eda0ed7875/hello <- Hello from ESP32-S31
    ... com.espressif.esp32s31.Hello: hello: PASS
-   ... com.espressif.esp32s31.Hello: hello: heartbeat {"thing":"esp32s31-fcb-eth","uptime_s":49,"mem_available_kb":5608} (0)
+   ... com.espressif.esp32s31.Hello: hello: heartbeat {"thing":"esp32s31-greengrass-32eda0ed7875","uptime_s":157,"mem_available_kb":4928} (0)
 
 The heartbeat can be watched in the AWS IoT MQTT test client by
 subscribing to ``esp32s31/+/heartbeat``.

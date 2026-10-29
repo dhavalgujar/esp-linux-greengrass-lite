@@ -1,0 +1,47 @@
+{
+  "Parameters": {
+    "SerialNumber": { "Type": "String" },
+    "AWS::IoT::Certificate::Id": { "Type": "String" }
+  },
+  "Resources": {
+    "thing": {
+      "Type": "AWS::IoT::Thing",
+      "Properties": {
+        "ThingName": { "Fn::Join": ["", ["@FLEET@-", { "Ref": "SerialNumber" }]] },
+        "ThingGroups": ["@FLEET@"]
+      },
+      "OverrideSettings": {
+        "ThingGroups": "MERGE"
+      }
+    },
+    "certificate": {
+      "Type": "AWS::IoT::Certificate",
+      "Properties": {
+        "CertificateId": { "Ref": "AWS::IoT::Certificate::Id" },
+        "Status": "ACTIVE"
+      }
+    },
+    "policy": {
+      "Type": "AWS::IoT::Policy",
+      "Properties": {
+        "PolicyDocument": { "Fn::Join": ["", [
+          "{\"Version\":\"2012-10-17\",\"Statement\":[",
+          "{\"Effect\":\"Allow\",\"Action\":\"iot:Connect\",\"Resource\":\"arn:aws:iot:@REGION@:@ACCOUNT@:client/@FLEET@-", { "Ref": "SerialNumber" }, "*\"},",
+          "{\"Effect\":\"Allow\",\"Action\":[\"iot:Publish\",\"iot:Receive\"],\"Resource\":[",
+          "\"arn:aws:iot:@REGION@:@ACCOUNT@:topic/$aws/things/@FLEET@-", { "Ref": "SerialNumber" }, "/*\",",
+          "\"arn:aws:iot:@REGION@:@ACCOUNT@:topic/esp32s31/@FLEET@-", { "Ref": "SerialNumber" }, "/*\"]},",
+          "{\"Effect\":\"Allow\",\"Action\":\"iot:Subscribe\",\"Resource\":[",
+          "\"arn:aws:iot:@REGION@:@ACCOUNT@:topicfilter/$aws/things/@FLEET@-", { "Ref": "SerialNumber" }, "/*\",",
+          "\"arn:aws:iot:@REGION@:@ACCOUNT@:topicfilter/esp32s31/@FLEET@-", { "Ref": "SerialNumber" }, "/*\"]},",
+          "{\"Effect\":\"Allow\",\"Action\":\"iot:AssumeRoleWithCertificate\",\"Resource\":\"arn:aws:iot:@REGION@:@ACCOUNT@:rolealias/@ROLE_ALIAS@\"},",
+          "{\"Effect\":\"Allow\",\"Action\":[",
+          "\"greengrass:GetComponentVersionArtifact\",\"greengrass:ResolveComponentCandidates\",",
+          "\"greengrass:GetDeploymentConfiguration\",\"greengrass:ListThingGroupsForCoreDevice\",",
+          "\"greengrass:PutCoreDevice\",\"greengrass:UpdateCoreDevice\",\"greengrass:GetCoreDevice\",",
+          "\"greengrass:GetConnectivityInfo\",\"greengrass:UpdateConnectivityInfo\"],\"Resource\":\"*\"}",
+          "]}"
+        ]] }
+      }
+    }
+  }
+}

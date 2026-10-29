@@ -1,19 +1,24 @@
 ---
 # SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
+#
+# A device of fleet @FLEET@ before it is provisioned. fleet-provisioning
+# (run by /etc/init.d/S95greengrass) fills in the blank system paths, the
+# Thing name and the nucleus endpoints in the configuration database, which
+# lives with the device's state under /data.
 system:
-  privateKeyPath: "/var/lib/greengrass/credentials/private.pem.key"
-  certificateFilePath: "/var/lib/greengrass/credentials/device.pem.crt"
-  rootCaPath: "/var/lib/greengrass/credentials/AmazonRootCA1.pem"
+  privateKeyPath: ""
+  certificateFilePath: ""
+  rootCaPath: ""
   rootPath: "/var/lib/greengrass"
-  thingName: "@THING@"
+  thingName: ""
 services:
   aws.greengrass.NucleusLite:
     componentType: "NUCLEUS"
     configuration:
       awsRegion: "@REGION@"
-      iotCredEndpoint: "@CRED_ENDPOINT@"
-      iotDataEndpoint: "@DATA_ENDPOINT@"
+      iotCredEndpoint: ""
+      iotDataEndpoint: ""
       iotRoleAlias: "@ROLE_ALIAS@"
       # A string: the nucleus lite configuration schema expects one.
       greengrassDataPlanePort: "8443"
@@ -21,3 +26,15 @@ services:
         posixUser: "gg_component:gg_component"
       platformOverride:
         architecture: "riscv32"
+  aws.greengrass.fleet_provisioning:
+    configuration:
+      iotDataEndpoint: "@DATA_ENDPOINT@"
+      iotCredEndpoint: "@CRED_ENDPOINT@"
+      rootCaPath: "/etc/greengrass/claim/AmazonRootCA1.pem"
+      claimKeyPath: "/etc/greengrass/claim/claim.pem.key"
+      claimCertPath: "/etc/greengrass/claim/claim.pem.crt"
+      csrCommonName: "@FLEET@"
+      templateName: "@FLEET@"
+      # S95greengrass passes the device's serial number (its MAC address).
+      templateParams:
+        SerialNumber: ""
