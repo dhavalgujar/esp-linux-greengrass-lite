@@ -74,7 +74,8 @@ scripts/nfs-deploy.sh esp32s31-fcb-eth
 # 4. Flash, after checking which chip is on the port.
 ESP_ESPTOOL=/path/to/esptool scripts/flash.sh /dev/serial/by-id/<port> <chip-mac>
 
-# 5. Deploy the demo component from the cloud.
+# 5. Deploy the demo component from the cloud (to the thing group
+#    <thing>-group, created if needed).
 scripts/aws-deploy-hello.sh esp32s31-fcb-eth
 ```
 

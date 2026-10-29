@@ -56,12 +56,19 @@ A failing component can briefly look RUNNING between restarts, and a
 deployment that samples it then reports SUCCEEDED; systemd hosts behave
 the same (`Type=exec` units are active as soon as they start).
 
-**Not yet verified from the cloud side:** a deployment created with
-`scripts/aws-deploy-hello.sh` and the core device status in the
-Greengrass console (the AWS CLI session expired during testing). The
-device side of that path (fleet status publication, `ggdeploymentd`'s
-data-plane calls, HTTP 200 from `greengrass/v2/coreDevices/.../thingGroups`)
-was exercised.
+### Cloud (AWS IoT Greengrass API)
+
+| Check | Result |
+| --- | --- |
+| Core device registered from fleet status | `esp32s31-fcb-eth`: HEALTHY, `linux`/`riscv32`, nucleus 2.7.0 |
+| Cloud deployment of `com.espressif.esp32s31.Hello` to thing group `esp32s31-fcb-eth-group` (`scripts/aws-deploy-hello.sh`) | IoT job created ~10 s after the deployment; received on `$aws/things/<thing>/jobs/notify-next-namespace-aws-gg-deployment` 1 s after queueing; job SUCCEEDED 23 s after creation |
+| Installed components (cloud view) | `com.espressif.esp32s31.Hello` 1.0.0 RUNNING, root component |
+| Core device status after the deployment | HEALTHY, refreshed by the device at completion |
+
+A deployment that targets the thing directly (instead of a thing group)
+was accepted by the API but never turned into an IoT job, also for the
+July 2026 test device; the deployment script therefore targets a thing
+group.
 
 ## Rejected configuration: glibc + systemd
 
