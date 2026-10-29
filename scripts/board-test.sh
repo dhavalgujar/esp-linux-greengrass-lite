@@ -45,9 +45,12 @@ hello=com.espressif.esp32s31.Hello
 bootstrap=com.espressif.esp32s31.BootstrapTest
 failures=0
 
+# A board that goes away mid-command fails the command within ~30 s instead
+# of leaving the session waiting for TCP to time out.
 board() {
 	ssh -i "$key" -o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
 		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+		-o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
 		-o BatchMode=yes "root@$ip" "$@"
 }
 check() {

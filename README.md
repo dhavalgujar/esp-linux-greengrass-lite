@@ -88,6 +88,8 @@ scripts/aws-provision.sh esp32s31-fcb-eth
 #    credentials and a development SSH key into its export.
 S31_NFS_CLIENT_NET=192.168.0.0/24 scripts/nfs-server.sh
 scripts/nfs-deploy.sh esp32s31-fcb-eth
+#    Redeploying to a running board is safe: it keeps its current tree
+#    until it reboots. Stop Greengrass on it first, then reboot it.
 
 # 4. Flash, after checking which chip is on the port.
 ESP_ESPTOOL=/path/to/esptool scripts/flash.sh /dev/serial/by-id/<port> <chip-mac>
@@ -125,6 +127,10 @@ and IoT role alias (`GG_ROLE_ALIAS`, default
 `ESP32S31GreengrassTokenExchangeAlias`), and a Greengrass service role
 associated with the account. Without the service role association,
 deployments are recorded but never reach the device.
+
+Dropbear (SSH) is in the image for development and for
+`scripts/board-test.sh` only; Greengrass does not use it. The serial
+console is not a substitute here: opening the port resets the board.
 
 The NFS export holds the device's private key: keep it restricted to the
 board's subnet. Opening the board's USB-UART resets it (its CP2102N drives

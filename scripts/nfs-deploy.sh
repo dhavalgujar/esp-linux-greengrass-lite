@@ -14,8 +14,15 @@
 #                    written through it so that ownership is preserved
 #                    without host root.
 #
-# --clean removes the previous root first, including Greengrass state; only
-# the SSH host keys (/etc/dropbear) are kept.
+# The new root is assembled next to the current one and then swapped in by
+# renaming the directories. A board running from the export keeps using its
+# previous tree, now <root>.old, until it reboots; reboot it to switch, and
+# before deploying again (the next deployment deletes <root>.old).
+#
+# The SSH host keys (/etc/dropbear) are carried over, and so is the
+# Greengrass state (/var/lib/greengrass, /var/lib/ggl-svc) unless --clean
+# is given. For a consistent copy of that state, stop Greengrass on the
+# board first (/etc/init.d/S95greengrass stop).
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -36,35 +43,36 @@ test -f "$rootfs"
 test -f "$secrets/config.yaml"
 docker inspect -f '{{.State.Running}}' "$container" | grep -qx true
 
-if [ "$clean" = --clean ]; then
-	# Everything but the SSH host keys, so that the board keeps its SSH
-	# identity across clean deployments.
-	docker exec "$container" sh -c '
-		test -d "$1" || exit 0
-		find "$1" -mindepth 1 -maxdepth 1 ! -name etc -exec rm -rf {} +
-		test -d "$1/etc" || exit 0
-		find "$1/etc" -mindepth 1 -maxdepth 1 ! -name dropbear \
-			-exec rm -rf {} +' sh "$target"
-fi
-docker exec "$container" mkdir -p "$target"
+new=$target.new
+docker exec "$container" rm -rf "$new" "$target.old"
+docker exec "$container" mkdir -p "$new"
+docker exec -i "$container" tar -C "$new" -xpf - <"$rootfs"
+
 # On a writable root, dropbear's init script turns the /etc/dropbear symlink
-# into a directory holding the persistent host keys; keep it once it exists.
-keep=
-if docker exec "$container" test -d "$target/etc/dropbear" &&
-	! docker exec "$container" test -L "$target/etc/dropbear"; then
-	keep=--exclude=./etc/dropbear
+# into a directory holding the persistent host keys: carry it over, so that
+# the board keeps its SSH identity.
+keep=etc/dropbear
+if [ "$clean" != --clean ]; then
+	keep="$keep var/lib/greengrass var/lib/ggl-svc"
 fi
-docker exec -i "$container" tar -C "$target" --overwrite \
-	$keep -xpf - <"$rootfs"
+docker exec "$container" sh -c '
+	old=$1 new=$2
+	shift 2
+	for dir in "$@"; do
+		if [ -d "$old/$dir" ] && [ ! -L "$old/$dir" ]; then
+			rm -rf "${new:?}/$dir"
+			cp -a "$old/$dir" "$new/$dir"
+		fi
+	done' sh "$target" "$new" $keep
 
 # Read the ids from the tree just written through the container, so they
 # match whatever the export actually holds.
 uid_of() {
-	docker exec "$container" cat "$target/etc/passwd" |
+	docker exec "$container" cat "$new/etc/passwd" |
 		awk -F: -v u="$1" '$1 == u { print $3 }'
 }
 gid_of() {
-	docker exec "$container" cat "$target/etc/group" |
+	docker exec "$container" cat "$new/etc/group" |
 		awk -F: -v g="$1" '$1 == g { print $3 }'
 }
 ggcore_uid=$(uid_of ggcore)
@@ -78,33 +86,39 @@ if [ ! -f "$ssh_key" ]; then
 	ssh-keygen -q -t ed25519 -N '' -C "s31-ggl-dev" -f "$ssh_key"
 fi
 
-stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
+files=$(mktemp -d)
+trap 'rm -rf "$files"' EXIT
 (
 	umask 077
-	mkdir -p "$stage/etc/greengrass/config.d" \
-		"$stage/var/lib/greengrass/credentials" "$stage/root/.ssh"
-	cp "$secrets/config.yaml" "$stage/etc/greengrass/config.yaml"
+	mkdir -p "$files/etc/greengrass/config.d" \
+		"$files/var/lib/greengrass/credentials" "$files/root/.ssh"
+	cp "$secrets/config.yaml" "$files/etc/greengrass/config.yaml"
 	cp "$secrets/device.pem.crt" "$secrets/private.pem.key" \
-		"$secrets/AmazonRootCA1.pem" "$stage/var/lib/greengrass/credentials/"
-	cp "$ssh_key.pub" "$stage/root/.ssh/authorized_keys"
+		"$secrets/AmazonRootCA1.pem" "$files/var/lib/greengrass/credentials/"
+	cp "$ssh_key.pub" "$files/root/.ssh/authorized_keys"
 )
-chmod 0700 "$stage/root/.ssh"
-chmod 0755 "$stage/etc/greengrass" "$stage/etc/greengrass/config.d"
-chmod 0644 "$stage/etc/greengrass/config.yaml"
-chmod 0755 "$stage/var/lib/greengrass"
-chmod 0700 "$stage/var/lib/greengrass/credentials"
-chmod 0644 "$stage/var/lib/greengrass/credentials/device.pem.crt" \
-	"$stage/var/lib/greengrass/credentials/AmazonRootCA1.pem"
-chmod 0600 "$stage/var/lib/greengrass/credentials/private.pem.key"
+chmod 0700 "$files/root/.ssh"
+chmod 0755 "$files/etc/greengrass" "$files/etc/greengrass/config.d"
+chmod 0644 "$files/etc/greengrass/config.yaml"
+chmod 0755 "$files/var/lib/greengrass"
+chmod 0700 "$files/var/lib/greengrass/credentials"
+chmod 0644 "$files/var/lib/greengrass/credentials/device.pem.crt" \
+	"$files/var/lib/greengrass/credentials/AmazonRootCA1.pem"
+chmod 0600 "$files/var/lib/greengrass/credentials/private.pem.key"
 
 # Name only the leaf directories: tar then leaves the root's own /etc, /var,
 # /var/lib and /root (modes and owners) untouched.
-tar -C "$stage" -cf - --owner=0 --group=0 etc/greengrass root/.ssh |
-	docker exec -i "$container" tar -C "$target" -xpf -
-tar -C "$stage" -cf - --owner="$ggcore_uid" --group="$ggcore_gid" \
+tar -C "$files" -cf - --owner=0 --group=0 etc/greengrass root/.ssh |
+	docker exec -i "$container" tar -C "$new" -xpf -
+tar -C "$files" -cf - --owner="$ggcore_uid" --group="$ggcore_gid" \
 	--numeric-owner var/lib/greengrass |
-	docker exec -i "$container" tar -C "$target" -xpf -
+	docker exec -i "$container" tar -C "$new" -xpf -
+
+# Swap: NFS file handles follow the inodes (no_subtree_check), so a running
+# board is unaffected by the rename.
+docker exec "$container" sh -c '
+	if [ -d "$1" ]; then mv "$1" "$1.old"; fi
+	mv "$1.new" "$1"' sh "$target"
 
 echo "Deployed the root filesystem for $thing to $root"
 echo "SSH: ssh -i $ssh_key root@<board-ip>"

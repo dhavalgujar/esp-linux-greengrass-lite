@@ -12,10 +12,13 @@ Espressif's public musl toolchain, boot stack and kernel; busybox init;
 Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 
 A fresh clone of this repository builds into an empty work area in 18
-minutes on a 32-core workstation (downloads cached). The build is
-reproducible (`BR2_REPRODUCIBLE`): the fresh clone's `rootfs.tar` and
-`s31_full_flash.bin` are byte-for-byte identical to those of an
-independent build in another directory. Every download (80 files) is
+minutes on an otherwise idle 32-core workstation (downloads cached; 31
+minutes on a shared, loaded one). The build is reproducible
+(`BR2_REPRODUCIBLE`): a fresh clone of commit `ba296a9` builds a
+`rootfs.tar` (`22b77b62…`) and an `s31_full_flash.bin` (`37bbe780…`)
+byte-for-byte identical to those of the incremental development build in
+another directory. Those are the images the results below were measured
+on. Every download (80 files) is
 hash-checked with `BR2_DOWNLOAD_FORCE_CHECK_HASHES`; `esp-linux-bsp` is
 fetched by esp-buildroot-external from a branch, so its hash fails the
 build if that branch moves.
@@ -23,7 +26,7 @@ build if that branch moves.
 ### End-to-end test (`scripts/board-test.sh --cloud --reset`)
 
 On the final image, after a clean deployment of the root filesystem and a
-cold boot: 11/11 checks pass in about 7 minutes.
+software reboot: 13/13 checks pass in 9 minutes.
 
 ```
 PASS  core units active, no restarts
@@ -33,7 +36,9 @@ PASS  IPC caller outside any unit refused
 PASS  failing component ends BROKEN, removal cleans up
 PASS  install and startup phases (systemd-notify) deploy
 PASS  local deployment root removed
+PASS  cloud deployment with a bootstrap step: reboot, resume, SUCCEEDED
 PASS  cloud deployment of the demo SUCCEEDED
+PASS  test component removed from the device and the account
 PASS  core device HEALTHY, demo RUNNING (Greengrass API)
 PASS  after a cold reset: core units and deployed demo back
 PASS  core units active, no restarts (end)
@@ -65,8 +70,50 @@ override a later stop, dependents of a failed core daemon waiting forever,
 links left by units that failed to load or were removed, and log draining
 that could starve the main loop.
 
+A second independent review, of the result, found:
+
+- **IPC identity could be taken over through PID reuse** (high). A unit
+  that remains active after its main process exits (a oneshot with
+  `RemainAfterExit`, a startup phase's background process) was matched
+  by session ID. Once that session emptied, any local process could fork
+  until it got the same PID, call `setsid()` and be identified as the
+  component. No session- or ancestry-based check closes this without
+  cgroups. Units now run in their own cgroup (`CONFIG_CGROUPS`, no
+  controllers), which processes cannot leave, as under systemd.
+- **A local user could fill the control socket's 8 connection slots**,
+  and clients had no timeouts, so `whois` from ggipcd could hang. Now
+  there are 16 slots, at most 4 per non-root user, and 10 s client
+  timeouts.
+- **Notifications were applied to every unit type**, letting a `Type=exec`
+  component be marked STOPPING. Now only `Type=notify` units accept them,
+  per `NotifyAccess`, as under systemd.
+- **Linked unit files stayed in a directory `ggcore` can write** and were
+  re-read as root at every boot. The same holds upstream on systemd. Units
+  now run from a root-only copy taken by `systemctl link`.
+- Leftover processes only ever got SIGTERM (now SIGKILL after
+  `TimeoutStopSec`); `BindsTo=` was treated as `Wants=` (now the bound unit
+  stops and restarts with its dependency); 48 units at most (now 128);
+  `nfs-deploy.sh --clean` also discarded the SSH host keys (now kept).
+
 Only one ESP32-S31 Function-CoreBoard was available, so the cloud checks
 cover one core device.
+
+### Reboots and bootstrap deployments
+
+A cloud deployment of a component with a `bootstrap` step makes nucleus
+lite reboot the device (`systemctl reboot`) and finish the deployment
+after the boot. Two defects in the public sources stopped this:
+
+| Defect | Evidence | Fix |
+| --- | --- | --- |
+| `reboot` never came back | console: `reboot: Restarting system`, then nothing for 5 min; recovered only by EN | OpenSBI serviced SBI SRST by resetting HP core 0 alone (`LP_AONCLKRST_HPCORE0_RESET_CTRL_REG`). Now uses the ROM's system reset (`LP_SYSTEM_REG_SYS_CTRL_REG.SYS_SW_RST`). |
+| The resumed deployment never completed in the cloud | device: `reporting job as SUCCEEDED`, then `Received rejected response ... "code":"InvalidRequest"` with the log line cut at the job ID; job IN_PROGRESS | `retrieve_in_progress_deployment()` never set the jobs ID's length, so the ID was padded with NULs to 64 bytes. Patch 0004, one line; also present on upstream main. |
+
+With both fixes, the stuck job from before the fix completed on the next
+boot of the fixed image: bootstrap step, `rst:0x3 (SW_SYS_RESET)`,
+deployment resumed, job SUCCEEDED 103 s after the device picked it up.
+`board-test.sh --cloud` covers this path. Plain `reboot`: SSH back in
+47–57 s.
 
 ### Cold boot (hardware reset, no manual steps)
 
@@ -88,16 +135,21 @@ once the clock is right).
 
 ### Memory, steady state
 
-All nine core units plus the deployed demo component:
+All nine core units plus the deployed demo component, 3 minutes after a
+cold boot:
 
 | | kB |
 | --- | ---: |
-| MemTotal | 14728 |
-| MemAvailable | 5680 |
-| AnonPages | 3684 |
-| Cached | 6456 |
+| MemTotal | 14720 |
+| MemAvailable | 5640 |
+| AnonPages | 3708 |
+| Cached | 6460 |
 
-During a deployment MemAvailable dips to ~4.7 MiB.
+`CONFIG_CGROUPS` costs 8 kB of MemTotal (37 KB of XIP kernel in flash);
+before it, MemTotal was 14728 kB and MemAvailable 5680 kB. During a
+deployment MemAvailable dips to ~4.7 MiB. Afterwards `ggdeploymentd` keeps
+~450 kB more heap (1156 kB vs 708 kB anonymous after two cloud
+deployments), so MemAvailable stays ~4.7 MiB until the next boot.
 
 ### Functional checks
 
@@ -110,7 +162,8 @@ During a deployment MemAvailable dips to ~4.7 MiB.
 | Deployed component restarts after a cold reset | pass |
 | Removal deployment (`ggl-cli deploy -d`) | SUCCEEDED; unit stopped, disabled, unit file removed |
 | Component that always fails | restarted 3 times, then `failed (start-limit-hit)`, reported BROKEN |
-| `recipe-runner` started outside any unit claiming the demo component | refused by ggipc-auth (`ggl-svcd` whois) |
+| `recipe-runner` started outside any unit claiming the demo component | refused by ggipc-auth (`ggl-svcd` whois, by cgroup) |
+| Every unit in its own cgroup (`/sys/fs/cgroup/ggl-svc/<unit>`) | pass |
 | Forged SVCUID | refused by ggipcd |
 | Core daemons run as `ggcore`; `ggdeploymentd`, `gghealthd` as root | pass |
 | Unit output in `/var/log/messages`, tagged by unit, rotated by syslogd | pass |
@@ -130,6 +183,14 @@ the same (`Type=exec` units are active as soon as they start).
 | Cloud configuration update (merge `message`, `heartbeatSeconds: 20`) | SUCCEEDED in 68 s; component restarted with the new message and a 20 s heartbeat |
 | Cloud removal (thing-group deployment without the component) | SUCCEEDED; unit stopped, link and unit file removed, cloud lists 0 installed components |
 | Restore with `scripts/aws-deploy-hello.sh` | SUCCEEDED in 27 s; RUNNING, `hello: PASS` |
+
+A deployment replaced while the device is still processing it is
+completed by nucleus lite anyway, and its report is rejected (the job
+is CANCELED). The device then does not start the replacing deployment's
+job, which stays QUEUED until the next job notification. Observed once,
+when deployments from an interrupted test run were superseded: the
+replacing job waited 18 minutes, until the next deployment to the group
+canceled it. A later deployment is picked up normally.
 
 A component deployed both from the cloud and locally (`ggl-cli`) stays
 installed until it is removed from both: nucleus lite keeps it while any
@@ -181,10 +242,26 @@ stretched to 160 s.
 
 ## Findings worth keeping
 
+- **`reboot` on the public ESP32-S31 OpenSBI hangs the chip**: it resets
+  CPU core 0 only. See "Reboots and bootstrap deployments".
+- **Nucleus lite recipes for the cloud need `runtime: "*"`** (or
+  `aws_nucleus_lite`) in the manifest platform: the cloud resolves
+  components for `{os=linux, runtime=aws_nucleus_lite,
+  architecture=riscv32}`, and a manifest without `runtime` fails with
+  "doesn't claim platform ... compatibility".
+
 - **`swiotlb=128` must stay on the command line.** The public device tree
   passes it; a forced `CONFIG_CMDLINE` that drops it lets the kernel
   reserve an ~8 MiB bounce buffer, leaving Linux 6.7 MiB instead of
   14.7 MiB.
+- **Never rewrite the NFS root in place under a running board.** Deleting
+  and re-extracting the tree left the running board's `/proc`, `/sys` and
+  `/dev` mounts on deleted directories: twice its userspace wedged (SSH
+  connects but never completes its banner), and only EN brought it back.
+  `nfs-deploy.sh` now assembles the new root next to the current one and
+  swaps the directories by renaming them. NFS file handles follow inodes
+  (`no_subtree_check`), so the board keeps running from the old tree
+  until it reboots.
 - **Never run a userspace DHCP client on `eth0` with an NFS root.** The
   kernel configured it (`ip=dhcp`); a deconfigure would pull the root
   filesystem away. DNS comes from `/proc/net/pnp`.
