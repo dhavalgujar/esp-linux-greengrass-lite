@@ -262,6 +262,10 @@ stretched to 160 s.
   swaps the directories by renaming them. NFS file handles follow inodes
   (`no_subtree_check`), so the board keeps running from the old tree
   until it reboots.
+- **An SSH session to a board that resets hangs indefinitely** without
+  keepalives (still open 225 s after an EN reset, when it was killed).
+  With `ServerAliveInterval=10`, `ServerAliveCountMax=3`, as
+  `board-test.sh` uses, it failed 9 s after the reset.
 - **Never run a userspace DHCP client on `eth0` with an NFS root.** The
   kernel configured it (`ip=dhcp`); a deconfigure would pull the root
   filesystem away. DNS comes from `/proc/net/pnp`.
