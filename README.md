@@ -63,11 +63,22 @@ root filesystem is mounted over NFSv3 from a workstation on the same
 network (the kernel does DHCP itself: `ip=dhcp root=/dev/nfs`). Rebuilds
 and redeployments need no reflashing.
 
-A product would not depend on an NFS server: it would boot a
-self-contained root from flash and keep `/var/lib/greengrass`
-(credentials, configuration database, deployed components) on local
-persistent storage, such as an SD card, eMMC, or a writable partition in a
-larger flash.
+A product would not depend on an NFS server. This board, with the public
+sources, cannot hold Greengrass without one, though (measured; details in
+`docs/results.md`):
+
+- Greengrass needs persistent writable storage for `/var/lib/greengrass`
+  (credentials, configuration database, deployed components, the state a
+  bootstrap reboot resumes from). The board's flash root partition is a
+  read-only ROM mapping (`physmap`, `type=rom`): the public kernel has no
+  SPI-NOR write driver and no flash file system. No SD card is fitted.
+- The root file system compresses to 8.7 MiB; the flash layout reserves
+  4 MiB for it.
+
+A product port therefore needs local writable storage (an SD card or eMMC
+on the SDMMC host, whose block driver the kernel already has, or a
+writable flash partition with an SPI-NOR driver) and a flash layout with
+room for the root.
 
 ## Usage
 

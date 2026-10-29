@@ -244,6 +244,24 @@ stretched to 160 s.
   time synchronisation (the clock starts at 1970, which breaks TLS
   certificate validation). This repository adds both.
 
+## Why there is no flash-only configuration
+
+Measured on the board and the final image:
+
+| | |
+| --- | --- |
+| Flash root partition (`mtd0`, `physmap` at `0x40b00000`) | 4 MiB, `type=rom`, `flags=0x0`: read-only |
+| Flash write path in the public kernel | none (`MTD_ROM`, `MTD_PHYSMAP`; no SPI-NOR, JFFS2 or UBIFS) |
+| SD card / eMMC | SDMMC host probes, no card fitted |
+| Root file system | 15.4 MiB, 8.7 MiB gzip -9 |
+
+The largest items are `libcrypto` (3.8 MB), `libstdc++` (1.7 MB), the
+`sqlite3` shell (1.2 MB) and the external toolchain's loaders for two other
+ABIs (`ld-musl-riscv32-sf`, `ld-musl-riscv64`, 1.5 MB). Trimming would not
+make 4 MiB, and without writable storage nucleus lite would lose its
+configuration and every deployment at each boot, so a flash-only image
+was not built.
+
 ## Findings worth keeping
 
 - **`reboot` on the public ESP32-S31 OpenSBI hangs the chip**: it resets
