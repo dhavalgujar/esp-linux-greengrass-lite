@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Remove what the image does not use and that would otherwise keep it from
 # being reproducible (these embed build paths): the command-line tools of
 # libzip and liburiparser (Greengrass links the libraries only) and

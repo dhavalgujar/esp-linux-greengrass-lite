@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Diagnostic: sample memory pressure and blocked tasks every 10 s.
 out=/var/log/s31-memlog.txt
 : >"$out"

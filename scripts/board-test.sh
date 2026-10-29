@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # End-to-end checks of a running board:
 #
 #   scripts/board-test.sh <board-ip> <thing-name> [--cloud]

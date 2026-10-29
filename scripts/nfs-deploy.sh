@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Install the built root filesystem into the NFS export, plus the device's
 # Greengrass credentials and a development SSH key:
 #

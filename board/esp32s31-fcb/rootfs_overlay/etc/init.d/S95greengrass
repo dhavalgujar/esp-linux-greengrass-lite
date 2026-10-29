@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 #
 # Greengrass Lite without systemd: ggl-svcd runs the core daemons (units in
 # /usr/lib/ggl-svc) and every component unit a deployment linked and

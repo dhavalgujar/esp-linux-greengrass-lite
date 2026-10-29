@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Check out the pinned Buildroot and esp-buildroot-external revisions
 # (shallow) into $S31_WORK/deps.
 set -eu

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Flash the boot stack and kernel to an ESP32-S31:
 #
 #   scripts/flash.sh <serial-port> <expected-chip-mac>

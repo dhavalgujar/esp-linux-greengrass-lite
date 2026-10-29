@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # ESP32-S31 Function-CoreBoard, Ethernet, Greengrass Lite portable core.
 #
 # Espressif's public toolchain and boot stack (as in esp-buildroot-external's

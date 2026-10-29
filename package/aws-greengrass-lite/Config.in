@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+
 config BR2_PACKAGE_AWS_GREENGRASS_LITE
 	bool "aws-greengrass-lite"
 	depends on BR2_USE_MMU # fork()

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+
 config BR2_PACKAGE_ESP32S31_GGL_HELLO
 	bool "esp32s31-ggl-hello"
 	depends on BR2_PACKAGE_AWS_GREENGRASS_LITE

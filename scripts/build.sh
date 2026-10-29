@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Build the image: scripts/build.sh [make targets...]
 #
 #   S31_WORK         work area holding deps/, dl/ and out/ (default: repo/..)

@@ -1,4 +1,6 @@
 ---
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: CC0-1.0
 RecipeFormatVersion: "2020-01-25"
 ComponentName: "com.espressif.esp32s31.Hello"
 ComponentVersion: "1.0.0"

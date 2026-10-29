@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+// SPDX-License-Identifier: CC0-1.0
+
 // ESP32-S31 Greengrass Lite demo component.
 //
 // Proves the core-device path end to end, then reports a heartbeat:

@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: CC0-1.0
+#
+# The component itself needs no kernel option beyond networking. The
+# Greengrass Lite runtime it runs under does: CONFIG_CGROUPS, for ggl-svc
+# (board/esp32s31-fcb/linux-ggl-svc.fragment in this repository).

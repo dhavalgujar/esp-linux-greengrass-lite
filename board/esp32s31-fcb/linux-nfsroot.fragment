@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Development profile: the kernel brings eth0 up with DHCP and mounts its
 # root over NFSv3. scripts/build.sh writes the matching CONFIG_CMDLINE
 # (server address and export path) into the output directory.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 """Drive the ESP32-S31 Linux console over a CP2102N UART.
 
 Opening the port resets the board (DTR/RTS drive EN/BOOT), so by default

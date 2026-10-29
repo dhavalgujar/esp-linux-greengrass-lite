@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Provision an AWS IoT Thing for a Greengrass Lite core device:
 #
 #   scripts/aws-provision.sh <thing-name>

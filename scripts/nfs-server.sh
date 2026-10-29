@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Start the development NFS server container:
 #
 #   S31_NFS_CLIENT_NET=192.168.0.0/24 scripts/nfs-server.sh

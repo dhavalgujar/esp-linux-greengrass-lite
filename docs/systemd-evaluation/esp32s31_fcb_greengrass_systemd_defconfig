@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # EVALUATION ONLY: Greengrass Lite with its upstream systemd service model
 # on the ESP32-S31 Function-CoreBoard. It builds and boots, but does not fit
 # in 16 MiB of RAM (see README.md in this directory).

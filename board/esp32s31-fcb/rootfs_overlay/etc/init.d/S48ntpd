@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 #
 # AWS IoT rejects TLS from a clock that still reads 1970, so try to set the
 # time before Greengrass starts, then keep it in sync. Each attempt asks all

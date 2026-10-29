@@ -1,4 +1,6 @@
 ---
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 system:
   privateKeyPath: "/var/lib/greengrass/credentials/private.pem.key"
   certificateFilePath: "/var/lib/greengrass/credentials/device.pem.crt"

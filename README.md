@@ -18,11 +18,31 @@ AWS IoT Core and the Token Exchange Service, in 16 MiB of RAM.
 
 This repository is a Buildroot `BR2_EXTERNAL` tree layered on top of
 `esp-buildroot-external`. It uses Espressif's toolchain (musl), boot stack,
-kernel and flash packaging, and adds:
+kernel and flash packaging.
+
+## Repository layout
+
+```text
+esp32s31-greengrass-lite/
+├── configs/        Buildroot defconfig
+├── board/          kernel fragments, OpenSBI patch, root filesystem overlay
+├── package/        Greengrass Lite (v2.7.0 + 4 patches), demo component
+├── examples/       the demo component, as a self-contained example
+├── scripts/        build, flash, NFS deployment, AWS setup, board tests
+├── nfs-server/     container for the NFS root server
+├── aws/            device configuration and IoT policy templates
+├── docs/           architecture, results, the rejected systemd evaluation
+└── tools/          serial console helper
+```
 
 - `package/aws-greengrass-lite`: Greengrass Lite v2.7.0 with four patches
   (developed on the `esp32s31/v2.7.0` branch of a local fork);
-- `package/esp32s31-ggl-hello`: a native demo component;
+- `examples/cloud/greengrass-hello`: the demo component
+  (`com.espressif.esp32s31.Hello`), laid out as the examples in
+  [espressif/esp-linux-examples](https://github.com/espressif/esp-linux-examples)
+  are: its own README with troubleshooting, Makefile and recipe. The
+  Buildroot package `package/esp32s31-ggl-hello` builds it with that
+  Makefile;
 - `configs/esp32s31_fcb_greengrass_defconfig` and `board/esp32s31-fcb`:
   kernel options, one OpenSBI patch, time synchronisation and the
   Greengrass init script.
@@ -148,6 +168,30 @@ board's subnet. Opening the board's USB-UART resets it (its CP2102N drives
 EN); use SSH for inspection, and `tools/s31-console.py` when a console is
 needed.
 
+## Troubleshooting
+
+The component, Greengrass and the network, layer by layer:
+`examples/cloud/greengrass-hello/README.rst`. The board itself:
+
+- **SSH times out, the board answers no ARP:** it may sit in the ROM's
+  download mode (a tool that opened its serial port can put it there).
+  `esptool --port <port> --before no-reset --after no-reset read-mac`
+  answering with its MAC confirms it. Pulse EN with RTS while keeping DTR
+  released to boot it; `--after hard-reset` can leave it in download
+  mode.
+- **`reboot` never comes back:** the image lacks the OpenSBI patch in
+  `board/esp32s31-fcb/patches/opensbi`.
+- **SSH connects but never completes, `/proc` is missing:** the root was
+  rewritten underneath the running board by something other than
+  `scripts/nfs-deploy.sh`; reset it.
+
 ## Results
 
 `docs/results.md`.
+
+## License
+
+Repository infrastructure and documentation: Apache License 2.0
+(`LICENSE`). The example under `examples/` (source, recipe and build
+files): CC0-1.0, as in esp-linux-examples. The patches to Greengrass Lite
+are under its Apache-2.0 license. Each file states its SPDX identifier.

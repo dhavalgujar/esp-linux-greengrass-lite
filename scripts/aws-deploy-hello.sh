@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # Register com.espressif.esp32s31.Hello as a Greengrass component and deploy
 # it to a core device through a thing group:
 #
@@ -17,7 +19,7 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 thing=${1:?usage: $0 <thing-name>}
 group=${GG_THING_GROUP:-$thing-group}
 region=${AWS_REGION:-$(aws configure get region)}
-recipe=$repo/components/esp32s31-ggl-hello/recipe.yaml
+recipe=$repo/examples/cloud/greengrass-hello/recipe.yaml
 name=$(sed -n 's/^ComponentName: "\(.*\)"/\1/p' "$recipe")
 version=$(sed -n 's/^ComponentVersion: "\(.*\)"/\1/p' "$recipe")
 account=$(aws sts get-caller-identity --query Account --output text)

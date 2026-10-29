@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 # esp32s31_minimal disables the NAMESPACES parent symbol, which silently
 # defeats Buildroot's own NET_NS/USER_NS fixups for systemd.
 CONFIG_NAMESPACES=y
