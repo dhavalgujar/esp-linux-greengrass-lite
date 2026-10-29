@@ -126,7 +126,11 @@ deployment resumed, job SUCCEEDED 103 s after the device picked it up.
 | All nine core units active, zero restarts | ~45 s uptime |
 | Deployed demo component `hello: PASS` (IPC config, local pub/sub, AWS IoT Core round trip) | 48 s uptime |
 
-Identical over consecutive cold boots. An earlier version of the clock
+Identical over consecutive cold boots. Once, right after back-to-back EN
+resets, `tes-serverd` timed out writing its version to ggconfigd over the
+core bus (`Read timed out`), exited and was restarted by its unit; it
+then ran normally (NRestarts 1). The next two cold boots had zero
+restarts. An earlier version of the clock
 step queried one server per attempt; when the pool returned an
 unresponsive server, each attempt cost 10 s and one boot took 106 s to
 reach SSH. The step now asks several servers at once and gives up after
