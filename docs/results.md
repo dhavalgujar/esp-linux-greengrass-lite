@@ -52,9 +52,8 @@ PASS  core units active, no restarts (end)
 ```
 
 Without storage (`nfs-deploy.sh --fresh`, `board-test.sh --fresh`):
-12/12 checks pass in 7 minutes. The bootstrap checks do not apply (a
-deployment cannot outlive the reboot it needs), and the reset brings back a
-new device.
+12/12 checks pass. The bootstrap checks do not apply (a deployment cannot
+outlive the reboot it needs), and the reset brings back a new device.
 
 ```
 PASS  device provisioned itself, core units active
