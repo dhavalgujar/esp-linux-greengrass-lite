@@ -25,9 +25,18 @@ build if that branch moves.
 | Milestone | Time |
 | --- | --- |
 | Kernel DHCP done, NFS root mounted | 4.7 s |
-| SSH reachable | 18–21 s after reset |
+| Clock set (one attempt asks pool.ntp.org and time.google.com) | before Greengrass |
+| ggl-svcd starts the core units | 13 s uptime |
+| SSH reachable | 20 s after reset |
 | All nine core units active, zero restarts | ~45 s uptime |
-| Deployed demo component `hello: PASS` (IPC config, local pub/sub, AWS IoT Core round trip) | ~46 s uptime |
+| Deployed demo component `hello: PASS` (IPC config, local pub/sub, AWS IoT Core round trip) | 48 s uptime |
+
+Identical over consecutive cold boots. An earlier version of the clock
+step queried one server per attempt; when the pool returned an
+unresponsive server, each attempt cost 10 s and one boot took 106 s to
+reach SSH. The step now asks several servers at once and gives up after
+three attempts, leaving the ntpd daemon to finish (iotcored reconnects
+once the clock is right).
 
 ### Memory, steady state
 
@@ -70,6 +79,13 @@ the same (`Type=exec` units are active as soon as they start).
 | Cloud deployment of `com.espressif.esp32s31.Hello` to thing group `esp32s31-fcb-eth-group` (`scripts/aws-deploy-hello.sh`) | IoT job created ~10 s after the deployment; received on `$aws/things/<thing>/jobs/notify-next-namespace-aws-gg-deployment` 1 s after queueing; job SUCCEEDED 23 s after creation |
 | Installed components (cloud view) | `com.espressif.esp32s31.Hello` 1.0.0 RUNNING, root component |
 | Core device status after the deployment | HEALTHY, refreshed by the device at completion |
+| Cloud configuration update (merge `message`, `heartbeatSeconds: 20`) | SUCCEEDED in 68 s; component restarted with the new message and a 20 s heartbeat |
+| Cloud removal (thing-group deployment without the component) | SUCCEEDED; unit stopped, link and unit file removed, cloud lists 0 installed components |
+| Restore with `scripts/aws-deploy-hello.sh` | SUCCEEDED in 27 s; RUNNING, `hello: PASS` |
+
+A component deployed both from the cloud and locally (`ggl-cli`) stays
+installed until it is removed from both: nucleus lite keeps it while any
+deployment group, including the local one, lists it as a root.
 
 Deployments must target a thing group. For a deployment that targets a
 single core device, Greengrass does not create an IoT job: it writes the

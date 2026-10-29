@@ -1,25 +1,34 @@
 #!/bin/sh
 #
-# AWS IoT rejects TLS from a clock that still reads 1970, so set the time
-# once (blocking, bounded) before Greengrass starts, then keep it in sync.
+# AWS IoT rejects TLS from a clock that still reads 1970, so try to set the
+# time before Greengrass starts, then keep it in sync. Each attempt asks all
+# servers at once (one unresponsive server costs busybox ntpd ~10 s), and
+# the wait is bounded: if no server answers, boot continues, the daemon
+# keeps trying, and iotcored reconnects once the clock is right.
 
-NTP_SERVER=${NTP_SERVER:-pool.ntp.org}
+NTP_SERVERS=${NTP_SERVERS:-"pool.ntp.org time.google.com"}
+NTP_TRIES=${NTP_TRIES:-3}
+
+peers=
+for server in $NTP_SERVERS; do
+	peers="$peers -p $server"
+done
 
 case "$1" in
 start)
-	printf 'Setting clock from %s: ' "$NTP_SERVER"
+	printf 'Setting clock: '
 	tries=0
-	until ntpd -n -q -p "$NTP_SERVER" >/dev/null 2>&1; do
+	until ntpd -n -q $peers >/dev/null 2>&1; do
 		tries=$((tries + 1))
-		if [ "$tries" -ge 10 ]; then
-			echo "FAIL"
+		if [ "$tries" -ge "$NTP_TRIES" ]; then
+			echo "no answer yet, continuing"
 			break
 		fi
-		sleep 2
+		sleep 1
 	done
-	[ "$tries" -lt 10 ] && date -u '+%Y-%m-%dT%H:%M:%SZ'
+	[ "$tries" -lt "$NTP_TRIES" ] && date -u '+%Y-%m-%dT%H:%M:%SZ'
 	start-stop-daemon -S -q -b -m -p /run/ntpd.pid -x /usr/sbin/ntpd -- \
-		-n -p "$NTP_SERVER"
+		-n $peers
 	;;
 stop)
 	start-stop-daemon -K -q -p /run/ntpd.pid
