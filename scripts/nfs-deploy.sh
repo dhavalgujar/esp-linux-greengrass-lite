@@ -7,6 +7,9 @@
 #   S31_WORK         work area (default: repo/..)
 #   S31_NFS_DIR      host directory exported as $S31_NFS_EXPORT (default:
 #                    $S31_WORK/nfs)
+#   S31_NFS_ROOT     root directory inside the export (default: rootfs)
+#   S31_DEFCONFIG    defconfig the image was built from (selects the
+#                    output directory, as in scripts/build.sh)
 #   S31_NFS_CONTAINER  NFS server container (default: s31-ggl-nfs); files are
 #                    written through it so that ownership is preserved
 #                    without host root.
@@ -21,10 +24,12 @@ clean=${2:-}
 container=${S31_NFS_CONTAINER:-s31-ggl-nfs}
 nfs_dir=${S31_NFS_DIR:-$work/nfs}
 export_dir=${S31_NFS_EXPORT:-/srv/nfs/ggl}
-rootfs=$work/out/esp32s31_fcb_greengrass/images/rootfs.tar
+name=$(basename "${S31_DEFCONFIG:-esp32s31_fcb_greengrass_defconfig}" _defconfig)
+rootfs=$work/out/$name/images/rootfs.tar
 secrets=$work/secrets/$thing
-root=$nfs_dir/rootfs
-target=$export_dir/rootfs
+nfs_root=${S31_NFS_ROOT:-rootfs}
+root=$nfs_dir/$nfs_root
+target=$export_dir/$nfs_root
 
 test -f "$rootfs"
 test -f "$secrets/config.yaml"

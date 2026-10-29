@@ -34,7 +34,8 @@ kernel and flash packaging unchanged, and adds:
 Greengrass Lite is built as a set of systemd services, but the ESP32-S31
 gives Linux about 14.7 MiB. A glibc/systemd image of the same stack was
 built and booted: it thrashes before Greengrass starts and takes over 12
-minutes to reach a login (`docs/results.md`). The busybox image runs the
+minutes to reach a login (`docs/results.md`; the configuration is kept,
+reproducibly, in `docs/systemd-evaluation`). The busybox image runs the
 complete Greengrass Lite daemon set with ~5.7 MiB to spare. How the
 systemd dependencies are replaced: `docs/architecture.md`.
 
@@ -77,6 +78,10 @@ ESP_ESPTOOL=/path/to/esptool scripts/flash.sh /dev/serial/by-id/<port> <chip-mac
 # 5. Deploy the demo component from the cloud (to the thing group
 #    <thing>-group, created if needed).
 scripts/aws-deploy-hello.sh esp32s31-fcb-eth
+
+# 6. Check everything end to end: core units, local and cloud deployments,
+#    removal, failure handling, IPC caller identity and a cold reset.
+scripts/board-test.sh <board-ip> esp32s31-fcb-eth --cloud --reset <port> <chip-mac>
 ```
 
 The board appears as a Greengrass core device (`linux`/`riscv32`) in the

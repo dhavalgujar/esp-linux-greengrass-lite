@@ -9,6 +9,7 @@
 #
 #   ESP_ESPTOOL   ESP32-S31-capable esptool (default: from PATH)
 #   S31_WORK      work area (default: repo/..)
+#   S31_DEFCONFIG defconfig the image was built from (as in build.sh)
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -17,7 +18,8 @@ port=${1:?usage: $0 <serial-port> <expected-chip-mac>}
 expected=$(printf '%s' "${2:?usage: $0 <serial-port> <expected-chip-mac>}" |
 	tr '[:upper:]' '[:lower:]')
 esptool=${ESP_ESPTOOL:-esptool}
-image=$work/out/esp32s31_fcb_greengrass/images/s31_full_flash.bin
+name=$(basename "${S31_DEFCONFIG:-esp32s31_fcb_greengrass_defconfig}" _defconfig)
+image=$work/out/$name/images/s31_full_flash.bin
 
 test -f "$image"
 actual=$("$esptool" --port "$port" read-mac 2>&1 |

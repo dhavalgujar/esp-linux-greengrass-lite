@@ -1,0 +1,7 @@
+[Unit]
+Description=Memory pressure sampler (evaluation instrument)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+
+[Service]
+ExecStart=/usr/sbin/s31-memlog

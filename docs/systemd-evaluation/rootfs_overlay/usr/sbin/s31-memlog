@@ -1,0 +1,17 @@
+#!/bin/sh
+# Diagnostic: sample memory pressure and blocked tasks every 10 s.
+out=/var/log/s31-memlog.txt
+: >"$out"
+while :; do
+	{
+		echo "=== $(cut -d' ' -f1 /proc/uptime)"
+		grep -E 'MemFree|MemAvailable|^Cached|AnonPages|Shmem:' /proc/meminfo | tr -s ' ' | tr '\n' ' '; echo
+		cat /proc/pressure/memory /proc/pressure/io 2>/dev/null
+		grep -E '^(pgmajfault|workingset_refault_file|pgscan_direct|pgsteal_direct|allocstall_normal) ' /proc/vmstat | tr '\n' ' '; echo
+		for d in /proc/[0-9]*; do
+			read -r _ c s _ <"$d/stat" 2>/dev/null || continue
+			case $s in D|R) echo "  $s ${d#/proc/} $c $(cat $d/wchan 2>/dev/null)";; esac
+		done
+	} >>"$out"
+	sleep 10
+done

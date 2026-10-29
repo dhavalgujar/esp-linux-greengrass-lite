@@ -1,0 +1,15 @@
+# esp32s31_minimal disables the NAMESPACES parent symbol, which silently
+# defeats Buildroot's own NET_NS/USER_NS fixups for systemd.
+CONFIG_NAMESPACES=y
+CONFIG_NET_NS=y
+CONFIG_USER_NS=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+# Compressed swap in RAM.
+CONFIG_SWAP=y
+CONFIG_ZSMALLOC=y
+CONFIG_ZRAM=y
+CONFIG_ZRAM_BACKEND_LZO=y
+CONFIG_ZRAM_DEF_COMP_LZORLE=y
