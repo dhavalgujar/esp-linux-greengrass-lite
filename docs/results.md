@@ -65,10 +65,14 @@ the same (`Type=exec` units are active as soon as they start).
 | Installed components (cloud view) | `com.espressif.esp32s31.Hello` 1.0.0 RUNNING, root component |
 | Core device status after the deployment | HEALTHY, refreshed by the device at completion |
 
-A deployment that targets the thing directly (instead of a thing group)
-was accepted by the API but never turned into an IoT job, also for the
-July 2026 test device; the deployment script therefore targets a thing
-group.
+Deployments must target a thing group. For a deployment that targets a
+single core device, Greengrass does not create an IoT job: it writes the
+deployment into the device's named shadow `AWSManagedGreengrassV2Deployment`
+(observed: desired `fleetConfig`/`desiredStatus`, never reported).
+Greengrass nucleus lite v2.7.0 has no support for that shadow (no
+reference in its sources), so such deployments stay IN_PROGRESS forever;
+thing-group deployments are delivered through IoT Jobs, which it
+implements.
 
 ## Rejected configuration: glibc + systemd
 

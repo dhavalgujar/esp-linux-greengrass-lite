@@ -7,8 +7,9 @@
 #   GG_THING_GROUP   thing group to deploy to (default: <thing-name>-group);
 #                    created, and the thing added to it, if needed
 #
-# Deployments that target a single thing were accepted but never turned
-# into an IoT job in testing; thing-group deployments are delivered.
+# Greengrass delivers deployments that target a single core device through
+# the named shadow AWSManagedGreengrassV2Deployment, which nucleus lite does
+# not implement; thing-group deployments arrive as IoT Jobs.
 # The recipe has no artifacts; the binary ships in the image.
 set -eu
 
