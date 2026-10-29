@@ -5,7 +5,10 @@
 #       [--reset <serial-port> <chip-mac>]
 #
 #   --cloud   also deploy the demo from AWS (scripts/aws-deploy-hello.sh)
-#             and check the core device and component in the Greengrass API
+#             and check the core device and component in the Greengrass API;
+#             and deploy a test component with a bootstrap step, which
+#             makes the device reboot mid-deployment (registered in the
+#             account for the check and deleted afterwards)
 #   --reset   finally reset the board through its serial port (after
 #             checking the chip MAC) and check that everything, including
 #             the cloud-deployed demo, comes back (needs --cloud)
@@ -39,6 +42,7 @@ fi
 
 key=$work/secrets/ssh/id_ed25519
 hello=com.espressif.esp32s31.Hello
+bootstrap=com.espressif.esp32s31.BootstrapTest
 failures=0
 
 board() {
@@ -189,18 +193,90 @@ wait_cloud_deployment() {
 	return 1
 }
 
+aws_region() {
+	printf '%s\n' "${AWS_REGION:-$(aws configure get region)}"
+}
+aws_account() {
+	aws sts get-caller-identity --query Account --output text
+}
+
+# Deploys the components (JSON) to the thing group; prints the deployment.
+group_deploy() {
+	aws greengrassv2 create-deployment --region "$(aws_region)" \
+		--target-arn "arn:aws:iot:$(aws_region):$(aws_account):thinggroup/${GG_THING_GROUP:-$thing-group}" \
+		--deployment-name "board-test: $1" --components "$2" \
+		--query deploymentId --output text
+}
+
+bootstrap_arn() {
+	echo "arn:aws:greengrass:$(aws_region):$(aws_account):components:$bootstrap:versions:1.0.0"
+}
+
 # Start the local checks from a clean state: remove the demo from the
 # thing group (this also exercises a cloud removal).
 cloud_removal_succeeds() {
-	account=$(aws sts get-caller-identity --query Account --output text)
-	region=${AWS_REGION:-$(aws configure get region)}
-	dep=$(aws greengrassv2 create-deployment --region "$region" \
-		--target-arn "arn:aws:iot:$region:$account:thinggroup/${GG_THING_GROUP:-$thing-group}" \
-		--deployment-name "board-test: remove the demo" --components '{}' \
-		--query deploymentId --output text) || return 1
+	dep=$(group_deploy "remove the demo" '{}') || return 1
 	# A local deployment may still list the demo; local_root_removed checks
 	# that it is gone once neither does.
 	wait_cloud_deployment "$dep"
+}
+
+# A cloud deployment of a component with a bootstrap step: nucleus lite
+# reboots the device to complete it, then resumes the deployment after the
+# boot and reports it. Exercises the SBI system reset and the resumption of
+# the IoT job.
+cloud_bootstrap_reboot_succeeds() {
+	if ! aws greengrassv2 describe-component --arn "$(bootstrap_arn)" \
+		>/dev/null 2>&1; then
+		recipe=$(mktemp)
+		cat >"$recipe" <<EOF
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: "$bootstrap"
+ComponentVersion: "1.0.0"
+ComponentDescription: "board-test: a bootstrap step, which reboots the device."
+ComponentPublisher: "Espressif"
+Manifests:
+  - Platform:
+      os: linux
+      architecture: riscv32
+      runtime: "*"
+    Lifecycle:
+      bootstrap:
+        Script: "echo bootstraptest bootstrap"
+      run:
+        Script: "echo bootstraptest running; exec sleep 1000000"
+EOF
+		aws greengrassv2 create-component-version \
+			--inline-recipe "fileb://$recipe" >/dev/null
+		ret=$?
+		rm -f "$recipe"
+		[ "$ret" = 0 ] || return 1
+		for i in $(seq 1 30); do
+			aws greengrassv2 describe-component --arn "$(bootstrap_arn)" \
+				--query status.componentState --output text |
+				grep -qx DEPLOYABLE && break
+			sleep 2
+		done
+	fi
+	boot0=$(board 'cat /proc/sys/kernel/random/boot_id')
+	wait_cloud_deployment "$(group_deploy "bootstrap and reboot" \
+		"{\"$bootstrap\":{\"componentVersion\":\"1.0.0\"}}")" || return 1
+	[ "$(board 'cat /proc/sys/kernel/random/boot_id')" != "$boot0" ] &&
+		board "systemctl show ggl.$bootstrap.service" | grep -q ' active '
+}
+
+# The demo deployment replaced the test component's: nothing of it may run
+# any more, and its run unit is gone. (Its finished bootstrap unit stays
+# loaded until the next daemon-reload or boot: upstream's removal disables
+# only the run unit and reloads before deleting the unit files.) Then remove
+# it from the account.
+bootstrap_component_deleted() {
+	units=$(board 'for u in /var/lib/ggl-svc/links/*BootstrapTest*; do
+			[ -L "$u" ] && systemctl show "${u##*/}"
+		done; true') || return 1
+	! printf '%s\n' "$units" | grep -Eq "BootstrapTest\.service | (active|activating) " &&
+		aws greengrassv2 delete-component --arn "$(bootstrap_arn)"
 }
 
 cloud_deployment_succeeds() {
@@ -250,7 +326,9 @@ check "failing component ends BROKEN, removal cleans up" failing_component_is_br
 check "install and startup phases (systemd-notify) deploy" phased_component_deploys
 check "local deployment root removed" local_root_removed
 if [ "$cloud" = 1 ]; then
+	check "cloud deployment with a bootstrap step: reboot, resume, SUCCEEDED" cloud_bootstrap_reboot_succeeds
 	check "cloud deployment of the demo SUCCEEDED" cloud_deployment_succeeds
+	check "test component removed from the device and the account" bootstrap_component_deleted
 	check "core device HEALTHY, demo RUNNING (Greengrass API)" cloud_reports_healthy_and_running
 fi
 if [ -n "$reset_port" ]; then

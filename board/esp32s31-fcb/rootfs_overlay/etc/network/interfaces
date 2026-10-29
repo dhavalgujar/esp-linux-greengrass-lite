@@ -1,0 +1,5 @@
+# The kernel configures both interfaces before the NFS root is mounted:
+# ip=dhcp brings up eth0 and assigns 127.0.0.1 to lo. Reconfiguring them here
+# would fail on the existing address, or drop the root filesystem's network.
+auto lo
+iface lo inet manual

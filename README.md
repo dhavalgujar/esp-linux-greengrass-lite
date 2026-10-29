@@ -18,16 +18,33 @@ AWS IoT Core and the Token Exchange Service, in 16 MiB of RAM.
 
 This repository is a Buildroot `BR2_EXTERNAL` tree layered on top of
 `esp-buildroot-external`. It uses Espressif's toolchain (musl), boot stack,
-kernel and flash packaging unchanged, and adds:
+kernel and flash packaging, and adds:
 
-- `package/aws-greengrass-lite`: Greengrass Lite with three patches
-  (developed on the `esp32s31/v2.7.0` branch of a local fork):
-  riscv32 support, a systemd-free build (`GGL_PORTABLE_CORE`) and
-  `ggl-svc`, the small service manager that build runs under;
+- `package/aws-greengrass-lite`: Greengrass Lite v2.7.0 with four patches
+  (developed on the `esp32s31/v2.7.0` branch of a local fork);
 - `package/esp32s31-ggl-hello`: a native demo component;
 - `configs/esp32s31_fcb_greengrass_defconfig` and `board/esp32s31-fcb`:
-  NFS-root kernel options, time synchronisation and the Greengrass init
-  script.
+  kernel options, one OpenSBI patch, time synchronisation and the
+  Greengrass init script.
+
+## What is changed in the public sources, and why
+
+Everything else is built as published. Each change is a patch file in this
+repository, applied by Buildroot at build time:
+
+| Change | Where | Why it is needed |
+| --- | --- | --- |
+| Recognize `riscv32` (+4 lines) | Greengrass Lite, patch 0001 | Upstream only knows riscv64: recipe platform matching and fleet status fail on this RV32 chip. |
+| Build without systemd (`GGL_PORTABLE_CORE`, 6 files) | Greengrass Lite, patch 0002 | systemd does not fit in 16 MiB (below). Only affects builds with the option on. |
+| `ggl-svc` service manager; non-systemd backends in `gghealthd` and `ggipc-auth` | Greengrass Lite, patch 0003 | Upstream runs every component as a systemd unit, reads health over D-Bus and authorizes IPC callers by their systemd cgroup; these are the places that talk to systemd. `ggl-svc` (new module) provides the same behaviour. Only built with `GGL_PORTABLE_CORE`. |
+| Keep the IoT Jobs ID length on bootstrap resume (1 line) | Greengrass Lite, patch 0004 | Upstream bug, also on upstream main: every cloud deployment with a bootstrap step stays IN_PROGRESS forever after the device reboots. |
+| Reset the whole chip on SBI reboot | OpenSBI, `board/esp32s31-fcb/patches/opensbi` | The public firmware reset only CPU core 0, so `reboot` hung the board until EN was pulsed; Greengrass reboots the device itself to finish bootstrap steps. |
+| `CONFIG_CGROUPS=y` (no controllers) | kernel, `linux-ggl-svc.fragment` | `ggl-svc` puts each unit in its own cgroup, as systemd does, to tie processes to components for IPC authorization and stop. Costs ~37 KB of flash and ~8 KB of RAM. |
+| NFS root, IP autoconfiguration | kernel, `linux-nfsroot.fragment` | Development setup (below). |
+
+Patches 0001, 0002 and 0004 are independent of this board and are
+candidates for upstream Greengrass Lite; 0003 is the bulk of the work and
+only matters for systemd-free systems.
 
 ## Why no systemd
 
@@ -80,7 +97,8 @@ ESP_ESPTOOL=/path/to/esptool scripts/flash.sh /dev/serial/by-id/<port> <chip-mac
 scripts/aws-deploy-hello.sh esp32s31-fcb-eth
 
 # 6. Check everything end to end: core units, local and cloud deployments,
-#    removal, failure handling, IPC caller identity and a cold reset.
+#    removal, failure handling, IPC caller identity, a deployment that
+#    reboots the device (bootstrap step) and a cold reset.
 scripts/board-test.sh <board-ip> esp32s31-fcb-eth --cloud --reset <port> <chip-mac>
 ```
 

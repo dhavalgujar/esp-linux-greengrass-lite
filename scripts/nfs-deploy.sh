@@ -14,7 +14,8 @@
 #                    written through it so that ownership is preserved
 #                    without host root.
 #
-# --clean removes the previous root first, including Greengrass state.
+# --clean removes the previous root first, including Greengrass state; only
+# the SSH host keys (/etc/dropbear) are kept.
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -36,7 +37,14 @@ test -f "$secrets/config.yaml"
 docker inspect -f '{{.State.Running}}' "$container" | grep -qx true
 
 if [ "$clean" = --clean ]; then
-	docker exec "$container" rm -rf "$target"
+	# Everything but the SSH host keys, so that the board keeps its SSH
+	# identity across clean deployments.
+	docker exec "$container" sh -c '
+		test -d "$1" || exit 0
+		find "$1" -mindepth 1 -maxdepth 1 ! -name etc -exec rm -rf {} +
+		test -d "$1/etc" || exit 0
+		find "$1/etc" -mindepth 1 -maxdepth 1 ! -name dropbear \
+			-exec rm -rf {} +' sh "$target"
 fi
 docker exec "$container" mkdir -p "$target"
 # On a writable root, dropbear's init script turns the /etc/dropbear symlink

@@ -1,0 +1,44 @@
+From: Dhaval Gujar <dhaval.gujar@espressif.com>
+Subject: [PATCH] esp32s31: reset the whole system on SBI reboot
+
+The SBI system-reset handler triggered only the HP core 0 software reset
+(LP_AONCLKRST_HPCORE0_RESET_CTRL_REG bit 20). On an ESP32-S31 running
+Linux, "reboot" then stops after "reboot: Restarting system" and the board
+never boots again until EN is pulsed. Use the digital-system software reset
+(LP_SYSTEM_REG_SYS_CTRL_REG.SYS_SW_RST) that the ROM's software_reset()
+uses instead.
+
+Upstream: not yet submitted
+
+--- a/platform/generic/espressif/esp32s31/esp32s31.c
++++ b/platform/generic/espressif/esp32s31/esp32s31.c
+@@ -51,11 +51,13 @@
+ /* Slack over the source dtb for the generic platform's in-place fixups. */
+ #define S31_FIXUP_FDT_SIZE	0x3000
+ 
+-/* LP_AONCLKRST_HPCORE0_RESET_CTRL_REG @ 0x2070103C — bit 20 is the
+- * write-to-trigger HP core 0 software reset, used to service SBI
+- * shutdown / reboot requests. */
+-#define LP_AONCLKRST_HPCORE0_RESET_CTRL_REG  0x2070103CU
+-#define HPCORE_SW_RESET                      (1U << 20)
++/* LP_SYSTEM_REG_SYS_CTRL_REG @ 0x20700008 — bit 1 (SYS_SW_RST) resets the
++ * whole digital system, as the ROM's software_reset() does, used to service
++ * SBI shutdown / reboot requests. Resetting HP core 0 alone is not enough:
++ * the clocks, MSPI and caches Linux left configured survive it and the ROM
++ * never boots again. */
++#define LP_SYSTEM_REG_SYS_CTRL_REG           0x20700008U
++#define LP_SYSTEM_REG_SYS_SW_RST             (1U << 1)
+ 
+ static int s31_system_reset_check(u32 type, u32 reason)
+ {
+@@ -70,7 +72,9 @@
+ 
+ static void s31_system_reset(u32 type, u32 reason)
+ {
+-	writel(HPCORE_SW_RESET, (void *)LP_AONCLKRST_HPCORE0_RESET_CTRL_REG);
++	void *sys_ctrl = (void *)LP_SYSTEM_REG_SYS_CTRL_REG;
++
++	writel(readl(sys_ctrl) | LP_SYSTEM_REG_SYS_SW_RST, sys_ctrl);
+ 
+ 	/* If the reset doesn't take effect (e.g. shutdown on a chip with no
+ 	 * power-down path), spin in WFI so we don't return into garbage. */
