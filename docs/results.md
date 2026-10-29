@@ -11,8 +11,13 @@ Measured 2026-10-28/29.
 Espressif's public musl toolchain, boot stack and kernel; busybox init;
 Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 
-A clean build from this repository into an empty output directory takes
-15 minutes on a 32-core workstation (downloads cached).
+A fresh clone of this repository builds into an empty work area in 15
+minutes on a 32-core workstation (downloads cached and hash-checked); the
+resulting Greengrass binaries (`ggl-svcd`, `systemctl`, `gghealthd`,
+`ggipcd`, `ggdeploymentd`, `iotcored`, `esp32s31-ggl-hello`) are
+bit-identical to the ones validated below. The only download without a
+hash is `esp-linux-bsp`, which esp-buildroot-external fetches by branch
+name, so no fixed hash can exist for it.
 
 ### Cold boot (hardware reset, no manual steps)
 
