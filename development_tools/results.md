@@ -30,7 +30,7 @@ hash-checked with `BR2_DOWNLOAD_FORCE_CHECK_HASHES`; `esp-linux-bsp` is
 fetched by esp-buildroot-external from a branch, so its hash fails the
 build if that branch moves.
 
-### End-to-end test (`scripts/board-test.sh --cloud --reset`)
+### End-to-end test (`development_tools/board-test.sh --cloud --reset`)
 
 On the final image, after a clean deployment and a software reboot, for
 every combination of identity and storage:
@@ -122,7 +122,7 @@ cause is not known; `BR2_PACKAGE_LIBCURL_VERBOSE` would name it.
 | State in RAM (`--fresh`) after provisioning | 56 KB of the 4 MiB tmpfs |
 | Persistent storage, cold reset | same certificate, the cloud-deployed demo back |
 | No storage, cold reset | a new certificate on the same Thing, nothing deployed |
-| Superseded certificates | one per fresh boot; `scripts/aws-clean-certs.sh` removed them, keeping the device's (certificate ID checked against the device's PEM) |
+| Superseded certificates | one per fresh boot; `development_tools/aws-clean-certs.sh` removed them, keeping the device's (certificate ID checked against the device's PEM) |
 | AWS resources (`scripts/aws-provision.sh`) | thing group, provisioning template and IAM role, claim policy and certificate created; token-exchange role and alias, service role reused. An unrelated `test_fleet_provisioning` template in the account was left alone |
 
 Two pitfalls found on the way: `fleet-provisioning`'s options take
@@ -131,9 +131,9 @@ clean-up must only run for devices without storage, since a device with
 storage keeps its first certificate (removing it cut a persistent device
 off once during these tests; it was re-provisioned).
 
-### ggl-svc against systemd, and fuzzed (`tests/ggl-svc`)
+### ggl-svc against systemd, and fuzzed (`development_tools/ggl-svc`)
 
-Conformance (`tests/ggl-svc/conformance/run.sh`): 23 scenarios of the
+Conformance (`development_tools/ggl-svc/conformance/run.sh`): 23 scenarios of the
 units Greengrass generates, run under systemd 255 and under ggl-svcd as
 PID 1 of identical Ubuntu 24.04 containers, compared at 32 checkpoints
 (ActiveState, Result, NRestarts, leftover processes, environment).
@@ -152,7 +152,7 @@ The first run differed at 5 checkpoints, all ggl-svc bugs, fixed by patch
 After the fixes, all 32 checkpoints match, also when ggl-svc is built from
 the pinned release with the patch series.
 
-Fuzzing (`tests/ggl-svc/fuzz/run.sh 900`), libFuzzer with
+Fuzzing (`development_tools/ggl-svc/fuzz/run.sh 900`), libFuzzer with
 AddressSanitizer and UndefinedBehaviorSanitizer, 15 minutes per target:
 
 | Target | Inputs | Rate | Findings |
@@ -345,7 +345,7 @@ RAM swap (zram, `vm.swappiness=100`) and removing ifupdown's
 `network.service` did not change the outcome. The July 2026 proof of this
 stack ran on a 32 MiB board.
 
-Re-run from the committed configuration (`docs/systemd-evaluation`, built
+Re-run from the committed configuration (`development_tools/systemd-evaluation`, built
 with `S31_DEFCONFIG`, flashed with `scripts/flash.sh`, 2026-10-29): no SSH
 within 7 minutes; the sampler on the NFS root recorded
 

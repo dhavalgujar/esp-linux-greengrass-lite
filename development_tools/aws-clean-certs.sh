@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Remove the certificates a device no longer uses:
 #
-#   scripts/aws-clean-certs.sh <thing-name> [--dry-run]
+#   development_tools/aws-clean-certs.sh <thing-name> [--dry-run]
 #
 #   AWS_REGION   default: the CLI's configured region
 #

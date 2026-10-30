@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # End-to-end checks of a running board:
 #
-#   scripts/board-test.sh <board-ip> <fleet-name> [--cloud] [--fresh]
+#   development_tools/board-test.sh <board-ip> <fleet-name> [--cloud] [--fresh]
 #       [--reset <serial-port> <chip-mac>]
 #
 # The board belongs to the fleet (scripts/aws-provision.sh), in thing group

@@ -6,7 +6,7 @@
 #   fuzz_unit_file  the unit file parser (unit files come from deployments)
 #   fuzz_requests   the control protocol (any local user can connect)
 #
-#   tests/ggl-svc/fuzz/run.sh [seconds-per-target]   (default 300)
+#   development_tools/ggl-svc/fuzz/run.sh [seconds-per-target]   (default 300)
 #
 #   GGL_SRC   fuzz this aws-greengrass-lite tree instead of the pinned
 #             release with this repository's patches

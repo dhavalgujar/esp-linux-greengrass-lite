@@ -4,7 +4,7 @@
 # Unpack the pinned Greengrass Lite release and apply this repository's
 # patches, so that the tests exercise exactly the ggl-svc the image ships:
 #
-#   tests/ggl-svc/prepare-src.sh <output-dir>
+#   development_tools/ggl-svc/prepare-src.sh <output-dir>
 #
 #   BR2_DL_DIR   Buildroot download directory (default: $S31_WORK/dl)
 set -eu

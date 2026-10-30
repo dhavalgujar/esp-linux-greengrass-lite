@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Testing ggl-svc
 
 `ggl-svc` (patches 0003 and 0006) is a service manager written for this
-repository, standing in for systemd. Besides `scripts/board-test.sh`, which
+repository, standing in for systemd. Besides `development_tools/board-test.sh`, which
 runs Greengrass on the board, two workstation tests check it where it is
 most likely to be wrong or attackable. Both build ggl-svc from the pinned
 Greengrass Lite release with this repository's patches
@@ -15,7 +15,7 @@ Greengrass Lite release with this repository's patches
 ## Conformance with systemd
 
 ```sh
-tests/ggl-svc/conformance/run.sh [scenario ...]
+development_tools/ggl-svc/conformance/run.sh [scenario ...]
 ```
 
 Runs the same unit files under systemd 255 and under `ggl-svcd`, each as
@@ -38,7 +38,7 @@ cgroup, leftovers, `TimeoutStopSec`), `BindsTo=`/`Wants=`/`After=`, and
 ## Fuzzing
 
 ```sh
-tests/ggl-svc/fuzz/run.sh [seconds-per-target]
+development_tools/ggl-svc/fuzz/run.sh [seconds-per-target]
 ```
 
 libFuzzer with AddressSanitizer and UndefinedBehaviorSanitizer (clang) on
@@ -55,4 +55,4 @@ ggl-svcd's untrusted inputs:
 Both compile `ggl-svcd.c` itself, with its state, cgroup and core unit
 directories in `/dev/shm/ggl-svc-fuzz`.
 
-Results are in `docs/results.md`.
+Results are in `development_tools/results.md`.

@@ -15,7 +15,7 @@ To reproduce (alongside the main image; it uses its own output directory
 and NFS root):
 
 ```sh
-export S31_DEFCONFIG=$PWD/docs/systemd-evaluation/esp32s31_fcb_greengrass_systemd_defconfig
+export S31_DEFCONFIG=$PWD/development_tools/systemd-evaluation/esp32s31_fcb_greengrass_systemd_defconfig
 export S31_NFS_ROOT=systemd-eval
 S31_NFS_SERVER=<workstation-ip> scripts/build.sh
 scripts/nfs-deploy.sh <thing-name>

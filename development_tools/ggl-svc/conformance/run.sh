@@ -5,7 +5,7 @@
 # (scenarios.sh) under systemd and under ggl-svcd, each as PID 1 of a
 # container with the same userland, and compares what both report.
 #
-#   tests/ggl-svc/conformance/run.sh [scenario ...]
+#   development_tools/ggl-svc/conformance/run.sh [scenario ...]
 #
 #   GGL_SRC   test this aws-greengrass-lite tree instead of the pinned
 #             release with this repository's patches
