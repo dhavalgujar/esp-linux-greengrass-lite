@@ -1,0 +1,21 @@
+---
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+#
+# What every device of this image has in common. Its identity (Thing name,
+# credentials, region, endpoints, role alias) comes from a connection kit,
+# which S95greengrass applies to /var/lib/greengrass/config.d, or from fleet
+# provisioning (scripts/nfs-deploy.sh --claim installs a config.yaml with the
+# fleet's settings in place of this one).
+system:
+  rootPath: "/var/lib/greengrass"
+services:
+  aws.greengrass.NucleusLite:
+    componentType: "NUCLEUS"
+    configuration:
+      # A string: the nucleus lite configuration schema expects one.
+      greengrassDataPlanePort: "8443"
+      runWithDefault:
+        posixUser: "gg_component:gg_component"
+      platformOverride:
+        architecture: "riscv32"

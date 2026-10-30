@@ -27,15 +27,27 @@ build if that branch moves.
 
 ### End-to-end test (`scripts/board-test.sh --cloud --reset`)
 
-On the final image, after a clean deployment and a software reboot, the
-board provisioning itself at boot (fleet `esp32s31-greengrass`).
+On the final image, after a clean deployment and a software reboot, for
+every combination of identity and storage:
 
-With persistent storage (`/data` on the NFS server): 14/14 checks pass in
-10 minutes.
+| Identity | State (`/var/lib`) | Checks |
+| --- | --- | ---: |
+| Connection kit in the image (`nfs-deploy.sh --kit`, the default) | persistent (NFS) | 14/14 |
+| Connection kit in the image | RAM (`--fresh`) | 12/12 |
+| Generic image, kit put on the storage (`--kit-on-storage`) | persistent | 14/14 |
+| Fleet provisioning (`--claim`) | persistent | 14/14 |
+| Fleet provisioning | RAM | 12/12 |
+
+Without storage the bootstrap checks do not apply (a deployment cannot
+outlive the reboot it needs), and the cold reset brings back nothing
+deployed: with the kit in the image, the same identity; with fleet
+provisioning, a new certificate.
+
+The default, kit in the image with persistent storage:
 
 ```
-PASS  device provisioned itself, core units active
-PASS  Thing esp32s31-greengrass-32eda0ed7875 registered in group esp32s31-greengrass
+PASS  device has its identity, core units active
+PASS  Thing esp32s31-greengrass-fcb-eth registered in group esp32s31-greengrass
 PASS  cloud removal of the demo SUCCEEDED
 PASS  local deployment of the demo, AWS IoT Core round trip
 PASS  IPC caller outside any unit refused
@@ -51,13 +63,11 @@ PASS  core units active, no restarts (end)
 0 check(s) failed
 ```
 
-Without storage (`nfs-deploy.sh --fresh`, `board-test.sh --fresh`):
-12/12 checks pass. The bootstrap checks do not apply (a deployment cannot
-outlive the reboot it needs), and the reset brings back a new device.
+Kit in the image, no storage:
 
 ```
-PASS  device provisioned itself, core units active
-PASS  Thing esp32s31-greengrass-32eda0ed7875 registered in group esp32s31-greengrass
+PASS  device has its identity, core units active
+PASS  Thing esp32s31-greengrass-fcb-eth registered in group esp32s31-greengrass
 PASS  cloud removal of the demo SUCCEEDED
 PASS  local deployment of the demo, AWS IoT Core round trip
 PASS  IPC caller outside any unit refused
@@ -66,18 +76,45 @@ PASS  install and startup phases (systemd-notify) deploy
 PASS  local deployment root removed
 PASS  cloud deployment of the demo SUCCEEDED
 PASS  core device HEALTHY, demo RUNNING (Greengrass API)
-PASS  after a cold reset: provisioned anew, new certificate, nothing deployed
+PASS  after a cold reset: same identity (from the image), nothing deployed
 PASS  core units active, no restarts (end)
 0 check(s) failed
 ```
 
-### Device identity and state (fleet provisioning)
+### Device identity: connection kits
+
+The kit is the one the AWS IoT console downloads for a nucleus lite core
+device, made here by `scripts/aws-provision.sh esp32s31-greengrass
+--device fcb-eth`: Thing `esp32s31-greengrass-fcb-eth` registered with
+`aws iot register-thing` through the fleet's provisioning template, so in
+thing group `esp32s31-greengrass` and with a policy scoped to that Thing
+(client ID `esp32s31-greengrass-fcb-eth*`, its own `$aws/things/...` and
+`esp32s31/...` topics). RegisterThing does not evaluate the template's
+`Fn::Join`, which fleet provisioning does: the script renders it first
+(the first attempt failed on that and left an unattached certificate,
+since deleted).
+
+| Case | Result |
+| --- | --- |
+| Same image deployed again | kit not applied again; identity and deployments kept |
+| Kit dropped on the storage over an existing identity | "new connection kit …: starting the device over"; applied, then removed; previous deployments gone; same certificate (twice) |
+| Generic image, kit on the storage, clean state | applied at boot, removed; 14/14 |
+
+Once, after such a reset, a cloud deployment failed in cloud resolution:
+`ggdeploymentd`'s first data plane request returned 200, the next failed
+in curl, and every request after it failed too, 4 minutes later as well,
+until `ggdeploymentd` was restarted; the next deployment then succeeded.
+Four repetitions (two plain reboots, two resets) did not reproduce it. This
+libcurl is built without error strings (curl reports only "Error"), so the
+cause is not known; `BR2_PACKAGE_LIBCURL_VERBOSE` would name it.
+
+### Device identity: fleet provisioning
 
 | | Measured |
 | --- | --- |
 | Fresh boot to provisioned and running | provisioning starts ~23 s after reset, takes 37 s; Greengrass runs as the new device at ~60 s uptime |
 | First certificate request | sent before the MQTT connection is up (it takes ~11 s): failed without patch 0005, retried 3 s later with it |
-| `/data` in RAM (`--fresh`) after provisioning | 56 KB of the 4 MiB tmpfs |
+| State in RAM (`--fresh`) after provisioning | 56 KB of the 4 MiB tmpfs |
 | Persistent storage, cold reset | same certificate, the cloud-deployed demo back |
 | No storage, cold reset | a new certificate on the same Thing, nothing deployed |
 | Superseded certificates | one per fresh boot; `scripts/aws-clean-certs.sh` removed them, keeping the device's (certificate ID checked against the device's PEM) |

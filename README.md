@@ -138,47 +138,82 @@ OpenSBI reboot fix, plus systemd's own requirements: its kernel options
 (`docs/systemd-evaluation/linux-systemd.fragment`) and a `/run` large
 enough for `systemctl daemon-reload`, which refuses below 16 MiB free.
 
-## Device identity and state: `/data`
+## Device identity and state: `/var/lib`
 
-The image carries no device identity. Everything a device must remember
-lives under `/data`, which is all a board has to provide to make it
-persistent:
+Everything a device must remember lives in `/var/lib`, the standard place
+for state that persists across reboots. Making that persistent is all a
+board has to do:
 
 | | |
 | --- | --- |
-| `/data/greengrass` | credentials, configuration database, deployed components (bind-mounted on `/var/lib/greengrass`) |
-| `/data/ggl-svc` | the units deployments linked and enabled (on `/var/lib/ggl-svc`) |
+| `/var/lib/greengrass` | Greengrass's rootPath: credentials, configuration database, deployed components |
+| `/var/lib/ggl-svc` | the units deployments linked and enabled (root only) |
 
-At boot, `/etc/init.d/S95greengrass`:
+A board with persistent storage (an SD card, USB storage, a NAND or flash
+partition, NFS) mounts it on `/var/lib` in `/etc/fstab`. Without it,
+`/etc/init.d/S95greengrass` mounts a RAM file system there, and the device
+starts fresh at every boot.
 
-1. uses `/data` if the board mounted something there (`/etc/fstab`: an SD
-   card, USB storage, NAND or flash partition, NFS); otherwise mounts a
-   RAM file system there;
-2. if `/data/greengrass` holds device credentials, starts Greengrass as
-   that device, with its configuration and components;
-3. otherwise, if `/etc/greengrass/claim` holds a claim certificate,
-   provisions the device with [AWS IoT fleet
-   provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html)
-   (Greengrass Lite's `fleet-provisioning`): a key generated on the device,
-   a certificate signed by AWS IoT, the Thing `<fleet>-<serial>` registered
-   in thing group `<fleet>`, and a policy scoped to that Thing. The serial
-   is eth0's MAC address unless `/etc/default/greengrass` sets
-   `GGL_SERIAL`. It then starts Greengrass;
-4. otherwise, does not start Greengrass.
+### Identity: a connection kit per board (default)
 
-With persistent storage, a device provisions itself once and keeps its
-identity, configuration and deployments. Without it, every boot is a fresh
-device: provisioned again (a new certificate, the same Thing), with nothing
-deployed. The thing group's deployments are not sent again to a device
-that has completed them, and a deployment with a bootstrap step cannot
-outlive the reboot it needs. So on a board without storage, deploy what it
-must always run from the image (for example a local deployment at boot),
-and treat cloud deployments as lasting until the next reboot.
+As in upstream's manual provisioning and AWS's Greengrass Lite demo images,
+each board gets a **connection kit**: the `.zip` the AWS IoT console
+downloads under *Greengrass devices → Core devices → Set up one core
+device* for nucleus lite (`device.pem.crt`, `private.pem.key`,
+`AmazonRootCA1.pem`, `config.yaml`). `scripts/aws-provision.sh <fleet>
+--device <name>` makes the same kit from the command line, registering
+Thing `<fleet>-<name>` in thing group `<fleet>` with a policy scoped to it;
+its key is created on the workstation.
 
-The claim lets anyone who holds it register a device in the fleet, and
-each fresh boot leaves the previous certificate registered (unused: its key
-is gone). For production, add a pre-provisioning hook that validates the
-serial number, and clean up superseded certificates.
+The kit reaches the device in one of two ways:
+
+- **in the image** (`/etc/greengrass/connection-kit`;
+  `scripts/nfs-deploy.sh --kit`): one image per board. Without storage, the
+  board still keeps its identity across reboots;
+- **on the storage** (`/var/lib/greengrass/connection-kit`;
+  `scripts/nfs-deploy.sh --kit-on-storage`): one image for all boards; the
+  kit is applied at the next boot, then removed, as AWS's demo images do
+  with a kit copied to the SD card.
+
+Applying a kit puts its credentials in `/var/lib/greengrass/credentials`
+and its configuration in `/var/lib/greengrass/config.d`
+(`/etc/greengrass/config.d` links there); `/etc/greengrass/config.yaml`
+holds only what every device has in common. A kit in the image is applied
+when it differs from the one last applied, so flashing an image with a new
+kit changes the identity once, and reflashing the same one changes nothing.
+A kit for a different device starts the device over: its configuration and
+deployments go, as they belong to the previous identity.
+
+### Alternative: fleet provisioning
+
+With `scripts/aws-provision.sh <fleet>` (no `--device`) and
+`scripts/nfs-deploy.sh --claim <fleet>`, the image carries a claim
+certificate instead, and a device without credentials provisions itself at
+boot with [AWS IoT fleet
+provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html)
+(Greengrass Lite's `fleet-provisioning`): a key generated on the device, a
+certificate signed by AWS IoT, the Thing `<fleet>-<serial>` registered in
+thing group `<fleet>` with a policy scoped to it. The serial is eth0's MAC
+address unless `/etc/default/greengrass` sets `GGL_SERIAL`. One image
+serves all boards, but anyone holding the claim can register a device in
+the fleet (in production, add a pre-provisioning hook that validates the
+serial number), and without storage each boot provisions a new certificate,
+leaving the previous one registered (`scripts/aws-clean-certs.sh` removes
+them).
+
+### What persists
+
+| | Persistent storage | No storage |
+| --- | --- | --- |
+| Identity, kit in the image | kept | kept (applied at every boot) |
+| Identity, fleet provisioning | kept | a new certificate at every boot |
+| Configuration, deployed components | kept | lost at every reboot |
+
+Without storage, a thing group's deployments are not sent again to a
+device that has completed them, and a deployment with a bootstrap step
+cannot outlive the reboot it needs. So deploy what such a board must
+always run from the image (for example a local deployment at boot), and
+treat cloud deployments as lasting until the next reboot.
 
 ## Development setup: NFS root
 
@@ -215,29 +250,30 @@ ESP32-S31-capable `esptool`, and the usual Buildroot host packages.
 #    address on the board's network.
 S31_NFS_SERVER=192.168.0.126 ESP_ESPTOOL=/path/to/esptool scripts/build.sh
 
-# 2. Set up fleet provisioning in the AWS account (creates what is missing:
-#    thing group, provisioning template and role, claim policy and claim
-#    certificate). The claim and the device config.yaml go to
-#    ../secrets/<fleet> (mode 0700), never into this repository.
-scripts/aws-provision.sh esp32s31-greengrass
+# 2. Register the board in the AWS account and get its connection kit
+#    (creates what is missing: thing group, provisioning template and
+#    role). The kit goes to ../secrets/<fleet>/devices (mode 0700), never
+#    into this repository. A kit downloaded from the AWS IoT console works
+#    the same. (Fleet provisioning instead: aws-provision.sh <fleet>.)
+scripts/aws-provision.sh esp32s31-greengrass --device fcb-eth
 
-# 3. Start the NFS server and install the root filesystem, the claim and a
+# 3. Start the NFS server and install the root filesystem, the kit and a
 #    development SSH key into its export. The device's state goes to a
-#    second directory, mounted on /data (--fresh: keep it in RAM instead).
+#    second directory, mounted on /var/lib (--fresh: keep it in RAM).
+#    (Fleet provisioning instead: --claim esp32s31-greengrass.)
 S31_NFS_CLIENT_NET=192.168.0.0/24 scripts/nfs-server.sh
-scripts/nfs-deploy.sh esp32s31-greengrass
+scripts/nfs-deploy.sh --kit ../secrets/esp32s31-greengrass/devices/esp32s31-greengrass-fcb-eth-connectionKit.zip
 #    Redeploying to a running board is safe: it keeps its current tree
 #    until it reboots. Stop Greengrass on it first, then reboot it.
 
 # 4. Flash, after checking which chip is on the port.
 ESP_ESPTOOL=/path/to/esptool scripts/flash.sh /dev/serial/by-id/<port> <chip-mac>
 
-# 5. At its first boot the board provisions itself as Thing
-#    esp32s31-greengrass-<serial> in thing group esp32s31-greengrass.
-#    Deploy the demo component from the cloud to that group.
+# 5. The board boots as Thing esp32s31-greengrass-fcb-eth, in thing group
+#    esp32s31-greengrass. Deploy the demo component from the cloud to it.
 scripts/aws-deploy-hello.sh esp32s31-greengrass
 
-# 6. Check everything end to end: provisioning, core units, local and cloud
+# 6. Check everything end to end: identity, core units, local and cloud
 #    deployments, removal, failure handling, IPC caller identity, a
 #    deployment that reboots the device (bootstrap step) and a cold reset
 #    (--fresh after a --fresh deployment).
@@ -272,8 +308,8 @@ Dropbear (SSH) is in the image for development and for
 `scripts/board-test.sh` only; Greengrass does not use it. The serial
 console is not a substitute here: opening the port resets the board.
 
-The NFS export holds the claim certificate and the device's private key:
-keep it restricted to the board's subnet. Opening the board's USB-UART resets it (its CP2102N drives
+The NFS export holds the device's private key (or the claim): keep it
+restricted to the board's subnet. Opening the board's USB-UART resets it (its CP2102N drives
 EN); use SSH for inspection, and `tools/s31-console.py` when a console is
 needed.
 

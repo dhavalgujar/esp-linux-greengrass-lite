@@ -6,8 +6,9 @@
 #   scripts/board-test.sh <board-ip> <fleet-name> [--cloud] [--fresh]
 #       [--reset <serial-port> <chip-mac>]
 #
-# The board provisions itself into the fleet (scripts/aws-provision.sh) as
-# Thing <fleet>-<serial>, in thing group <fleet>.
+# The board belongs to the fleet (scripts/aws-provision.sh), in thing group
+# <fleet>: as the Thing of its connection kit, or provisioned at boot as
+# <fleet>-<serial>.
 #
 #   --cloud   also deploy the demo from AWS (scripts/aws-deploy-hello.sh)
 #             and check the core device and component in the Greengrass API;
@@ -20,8 +21,9 @@
 #             cloud-deployed demo
 #   --fresh   the board keeps its state in RAM (nfs-deploy.sh --fresh): skip
 #             the bootstrap check (a deployment cannot outlive the reboot it
-#             needs), and expect a new device after the reset: provisioned
-#             again with a new certificate, nothing deployed
+#             needs), and expect nothing deployed after the reset: the same
+#             identity with a connection kit in the image, a new certificate
+#             with fleet provisioning
 #
 #   S31_WORK      work area holding secrets/ssh (default: repo/..)
 #   ESP_ESPTOOL   esptool for --reset (default: from PATH)
@@ -312,16 +314,19 @@ cloud_reports_healthy_and_running() {
 			--output text | grep -qx RUNNING
 }
 
-# The device's certificate, or nothing before it is provisioned.
+# The device's certificate (from a connection kit, or fleet provisioning),
+# or nothing before it has one.
 device_certificate() {
-	board 'cat /var/lib/greengrass/credentials/certificate.pem' 2>/dev/null |
+	board 'cat /var/lib/greengrass/credentials/device.pem.crt \
+		/var/lib/greengrass/credentials/certificate.pem' 2>/dev/null |
 		sha256sum | cut -c1-16
 }
 
-# Waits until the device has provisioned itself and its core units run.
+# Waits until the device has its identity and its core units run.
 provisioned_and_running() {
 	board 'for i in $(seq 1 120); do
-			[ -s /var/lib/greengrass/credentials/certificate.pem ] &&
+			{ [ -s /var/lib/greengrass/credentials/device.pem.crt ] ||
+				[ -s /var/lib/greengrass/credentials/certificate.pem ]; } &&
 				[ "$(/etc/init.d/S95greengrass status | grep -c " active ")" -ge 9 ] &&
 				exit 0
 			sleep 5
@@ -360,13 +365,18 @@ comes_back_after_reset() {
 		core_units_healthy && [ "$(device_certificate)" = "$cert0" ]
 }
 
-# No storage: a new device comes back, provisioned again, nothing deployed.
+# No storage: nothing deployed comes back; the identity does if the image
+# carries it (connection kit), a new one is provisioned otherwise.
 fresh_after_reset() {
 	cert0=$(device_certificate)
 	cold_reset || return 1
 	provisioned_and_running || return 1
-	[ "$(device_certificate)" != "$cert0" ] &&
-		! board 'ls /var/lib/ggl-svc/links' | grep -q Hello
+	if [ "$image_kit" = 1 ]; then
+		[ "$(device_certificate)" = "$cert0" ] || return 1
+	else
+		[ "$(device_certificate)" != "$cert0" ] || return 1
+	fi
+	! board 'ls /var/lib/ggl-svc/links' | grep -q Hello
 }
 
 # Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
@@ -379,9 +389,15 @@ for leftover in com.espressif.esp32s31.FailTest com.espressif.esp32s31.PhaseTest
 	fi
 done
 
-check "device provisioned itself, core units active" provisioned_and_running
-serial=$(board 'tr -d ":\n" </sys/class/net/eth0/address')
-thing=${serial:+$fleet-$serial}
+check "device has its identity, core units active" provisioned_and_running
+image_kit=$(board 'test -d /etc/greengrass/connection-kit && echo 1 || echo 0')
+# The Thing: the connection kit's, or <fleet>-<serial> from provisioning.
+thing=$(board 'sed -n "s/^ *thingName: *\"\(.*\)\"/\1/p" \
+	/var/lib/greengrass/config.d/connection-kit.yaml 2>/dev/null')
+if [ -z "$thing" ]; then
+	serial=$(board 'tr -d ":\n" </sys/class/net/eth0/address')
+	thing=${serial:+$fleet-$serial}
+fi
 if [ "$cloud" = 1 ]; then
 	check "Thing $thing registered in group $group" device_registered
 	check "cloud removal of the demo SUCCEEDED" cloud_removal_succeeds
@@ -403,6 +419,8 @@ if [ "$cloud" = 1 ]; then
 fi
 if [ -n "$reset_port" ] && [ "$fresh" = 0 ]; then
 	check "after a cold reset: same device, core units and deployed demo back" comes_back_after_reset
+elif [ -n "$reset_port" ] && [ "$image_kit" = 1 ]; then
+	check "after a cold reset: same identity (from the image), nothing deployed" fresh_after_reset
 elif [ -n "$reset_port" ]; then
 	check "after a cold reset: provisioned anew, new certificate, nothing deployed" fresh_after_reset
 fi

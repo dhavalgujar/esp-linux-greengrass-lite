@@ -10,6 +10,3 @@ target=${1:?usage: $0 TARGET_DIR}
 rm -f "$target/usr/bin/uriparse" "$target/usr/bin/zipcmp" \
 	"$target/usr/bin/zipmerge" "$target/usr/bin/ziptool"
 rm -f "$target"/lib/libstdc++.so.*-gdb.py "$target"/usr/lib/libstdc++.so.*-gdb.py
-
-# Mount point for the device's persistent state (see S95greengrass).
-mkdir -p "$target/data"
