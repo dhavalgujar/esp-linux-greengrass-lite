@@ -16,11 +16,13 @@ Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 A fresh clone of this repository builds into an empty work area in 18–19
 minutes on a 32-core workstation (downloads cached; 31 minutes when the
 workstation was shared and loaded). The build is reproducible
-(`BR2_REPRODUCIBLE`): a fresh clone of commit `82a6019` builds a
+(`BR2_REPRODUCIBLE`): a fresh clone of commit `a1ded3e` builds a
 `rootfs.tar` (`04f604d5…`) and an `s31_full_flash.bin` (`37bbe780…`)
 byte-for-byte identical to those of the incremental development build in
-another directory (as did `ba296a9`, `dedae3d` and `82e02a0` before). The
-end-to-end tests below ran on those images. Incremental builds keep files a
+another directory (as did `609a1cb`, `228aa46` and `1190daa` before). The
+end-to-end tests below ran on those images. (These commits were later
+rebased onto an empty review base; that changed their hashes, not their
+trees, and the hashes here are the rebased ones.) Incremental builds keep files a
 change no longer installs (Buildroot does not remove them from its target
 directory): the `/data` mount point had to be removed by hand before the
 images matched again. Every download (80 files) is
