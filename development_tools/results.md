@@ -131,7 +131,29 @@ in the log (`Curl request failed due to error: …`). It costs ~36 kB of
 MemAvailable (5604 kB vs 5640 kB, 3 minutes after a cold boot) and changes
 `rootfs.tar` only (to `217f4e84…`; the flash image is unchanged). With it,
 five consecutive end-to-end runs passed 14/14, and the failure did not
-recur. The cause is still unknown: if it recurs, the log now names it.
+recur.
+
+The cause was a slow name server, which upstream does not retry (patch
+0008). The board's lookup test above asked within the endpoints' 60 s DNS
+TTL, so mostly the router's cache answered. Every credentials or data
+plane request on the device comes minutes after the previous one, so it
+asks the router's upstream again. Querying the router once a minute
+(past the TTL) for both endpoints for 3 hours: median 13 ms, and one
+answer took 5039 ms, longer than musl's resolver waits (5 s). That fits
+a failure ~6 s into the request. Reproduced on the board: with lookups
+made to time out for 15 s (`resolv.conf` pointing at an address that
+does not answer) as a cloud deployment arrived, `ggdeploymentd` logged
+`Curl request failed due to error: Could not resolve hostname` and the
+deployment FAILED. With patch 0008, which retries this error as upstream
+retries a failed connection (backoff from 1 s), the same test ended in
+SUCCEEDED, 5 s after the name server answered again.
+
+Also seen once in nine runs on 2026-11-03: a local deployment failed
+because `ggconfigd` answered a request from `ggdeploymentd` after 18 s,
+past the core bus's 10 s timeout. NFS showed no retransmissions (round
+trips ~10–35 ms); SQLite takes ~94 ms per transaction on this CPU even in
+RAM, and a deployment reads evicted program code again (see "Memory
+margin"), which is the likely reason. Not reproduced.
 
 ### Device identity: fleet provisioning
 
@@ -283,8 +305,9 @@ On the board, with the image that has patch 0007 (one unit owned by
 | First version of the fix, dropping on a full socket after 100 ms | | 3–4 %, 17 %, 15–19 % dropped: on one CPU core, syslogd cannot run while ggl-svcd sends, hence the change to hold output back |
 | `yes` writing as fast as it can | | 1000 lines per 30 s logged, rest counted as suppressed, none dropped; `systemctl show` 200 ms on average (87 ms idle), max 250 ms |
 
-The control-protocol and unit-file fuzzers, rebuilt with the changes,
-ran without findings, as did the 35 conformance checkpoints.
+Rebuilt with the changes, the fuzzers ran 15 minutes per target without
+findings (unit file parser: 43.6 million inputs; control protocol: 2.74
+million), and all 35 conformance checkpoints match.
 
 ### Reboots and bootstrap deployments
 

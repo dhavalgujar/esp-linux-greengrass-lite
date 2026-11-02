@@ -80,11 +80,12 @@ applied by Buildroot:
 | `ggl-svc`, a service manager for the units Greengrass generates | patches 0003, 0006, 0007 | Upstream runs components as systemd units, reads their health over D-Bus and identifies IPC callers by their systemd cgroup. Why not an existing supervisor: `docs/architecture.md`. |
 | Keep the IoT Jobs ID length on bootstrap resume | patch 0004 | Upstream bug, also on main: a cloud deployment with a bootstrap step never completes. |
 | Retry the fleet provisioning certificate request | patch 0005 | Upstream sends it after a fixed 5 s; the TLS connection takes ~11 s on this chip. |
+| Retry HTTP requests when the host name does not resolve | patch 0008 | Upstream gives up at once: one name server answer slower than musl's 5 s fails the deployment that needed it. |
 | Reset the whole chip on reboot | OpenSBI patch | The public firmware resets CPU core 0 only: `reboot` hangs the board. |
 | `CONFIG_CGROUPS=y` (no controllers) | kernel fragment | `ggl-svc` runs each unit in its own cgroup, as systemd does. |
 
-Patches 0001, 0002, 0004 and 0005 are candidates for upstream Greengrass
-Lite.
+Patches 0001, 0002, 0004, 0005 and 0008 are candidates for upstream
+Greengrass Lite.
 
 ## Repository layout
 

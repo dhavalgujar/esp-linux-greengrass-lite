@@ -33,9 +33,8 @@ The component, Greengrass and the network, layer by layer:
   components run as `gg_component`: keep them world-readable.
 - Without the account's Greengrass service role association, deployments
   are recorded but never reach the device.
-- **A cloud deployment FAILED with "TES credentials were not retrieved":**
-  `tesd`'s one request for credentials failed, and Greengrass does not
-  retry it. `grep "Curl request failed" /var/log/messages` names the curl
-  error. Revising the deployment retries it. This has been seen
-  intermittently, right after a reboot, with the cause not yet known
-  (`development_tools/results.md`).
+- **A cloud deployment FAILED with "Curl request failed":** the log names
+  curl's error (`grep "Curl request failed" /var/log/messages`). HTTP
+  requests are retried with backoff on timeouts, failed connections and
+  host names that did not resolve (patch 0008); other errors fail the
+  deployment, and revising the deployment retries it.
