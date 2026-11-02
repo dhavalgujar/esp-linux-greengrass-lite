@@ -16,12 +16,12 @@ Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 A fresh clone of this repository builds into an empty work area in 18–19
 minutes on a 32-core workstation (downloads cached; 31 minutes when the
 workstation was shared and loaded). The build is reproducible
-(`BR2_REPRODUCIBLE`): a fresh clone of commit `eaf4e65` builds a
-`rootfs.tar` (`217f4e84…`) and an `s31_full_flash.bin` (`37bbe780…`)
+(`BR2_REPRODUCIBLE`): a fresh clone of commit `871461f` builds a
+`rootfs.tar` (`6bb893c1…`) and an `s31_full_flash.bin` (`37bbe780…`)
 byte-for-byte identical to those of the incremental development build in
-another directory, in 23 minutes (as did `be19859`, `a1ded3e`, `609a1cb`,
-`228aa46` and `1190daa` before; until `be19859` the root file system was
-`04f604d5…`). The
+another directory, in 15 minutes (as did `eaf4e65`, `be19859`, `a1ded3e`,
+`609a1cb`, `228aa46` and `1190daa` before, with earlier root file
+systems; the flash image has not changed since `be19859`). The
 end-to-end tests below ran on those images. (These commits were later
 rebased onto an empty review base; that changed their hashes, not their
 trees, and the hashes here are the rebased ones.) Incremental builds keep files a
@@ -34,8 +34,9 @@ build if that branch moves.
 
 ### End-to-end test (`development_tools/board-test.sh --cloud --reset`)
 
-On the final image, after a clean deployment and a software reboot, for
-every combination of identity and storage:
+On the final image (`871461f`, with patches 0007 and 0008; also on
+`23f5135`, without 0008), after a clean deployment and a software
+reboot, for every combination of identity and storage:
 
 | Identity | State (`/var/lib`) | Checks |
 | --- | --- | ---: |
