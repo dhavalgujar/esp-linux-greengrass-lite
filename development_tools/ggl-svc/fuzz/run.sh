@@ -37,6 +37,7 @@ flags="-g -O1 -std=gnu11 -D_GNU_SOURCE
 	-fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
 	-DFUZZ_DIR=\"$dir\" -DSTATE_DIR=\"$dir/state\"
 	-DGGL_SVC_CORE_DIR=\"$dir/core\" -DCGROUP_ROOT=\"$dir/cgroup\"
+	-DGGL_SVC_LOG_PATH=\"$dir/no-log\"
 	-I$svc/include -I$svc/bin"
 failures=0
 for target in fuzz_unit_file fuzz_requests; do

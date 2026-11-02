@@ -16,10 +16,12 @@ Greengrass Lite v2.7.0 with `GGL_PORTABLE_CORE` and `ggl-svcd`.
 A fresh clone of this repository builds into an empty work area in 18–19
 minutes on a 32-core workstation (downloads cached; 31 minutes when the
 workstation was shared and loaded). The build is reproducible
-(`BR2_REPRODUCIBLE`): a fresh clone of commit `a1ded3e` builds a
-`rootfs.tar` (`04f604d5…`) and an `s31_full_flash.bin` (`37bbe780…`)
+(`BR2_REPRODUCIBLE`): a fresh clone of commit `eaf4e65` builds a
+`rootfs.tar` (`217f4e84…`) and an `s31_full_flash.bin` (`37bbe780…`)
 byte-for-byte identical to those of the incremental development build in
-another directory (as did `609a1cb`, `228aa46` and `1190daa` before). The
+another directory, in 23 minutes (as did `be19859`, `a1ded3e`, `609a1cb`,
+`228aa46` and `1190daa` before; until `be19859` the root file system was
+`04f604d5…`). The
 end-to-end tests below ran on those images. (These commits were later
 rebased onto an empty review base; that changed their hashes, not their
 trees, and the hashes here are the rebased ones.) Incremental builds keep files a
@@ -168,7 +170,12 @@ The first run differed at 5 checkpoints, all ggl-svc bugs, fixed by patch
 | `USER`/`LOGNAME`/`HOME`/`SHELL` for `User=nobody`, a normal user, no `User=` | per systemd's rules | `HOME=/nonexistent`, no `SHELL`, all four without `User=` |
 
 After the fixes, all 32 checkpoints match, also when ggl-svc is built from
-the pinned release with the patch series.
+the pinned release with the patch series. Three scenarios added with the
+security review (below: a very long unit file line, a working directory
+only root can reach, the signals a unit starts with) bring it to 26
+scenarios and 35 checkpoints. The third showed one more difference:
+systemd starts services with SIGPIPE ignored (`IgnoreSIGPIPE=`, true by
+default), ggl-svcd did not; patch 0007 fixes it, and all 35 match.
 
 Fuzzing (`development_tools/ggl-svc/fuzz/run.sh 900`), libFuzzer with
 AddressSanitizer and UndefinedBehaviorSanitizer, 15 minutes per target:
@@ -238,6 +245,47 @@ A second independent review, of the result, found:
 Only one ESP32-S31 Function-CoreBoard was available, so the cloud checks
 cover one core device.
 
+### Security review of ggl-svc
+
+A third independent review treated ggl-svc as a security boundary, with
+three attackers: a deployed component (`gg_component`), a compromised
+`ggcore` daemon, and any local user. It built ggl-svcd natively and
+confirmed findings with proofs of concept in privileged containers. One
+premise frames the ratings: a recipe may ask to run as root
+(`RequiresPrivilege`), and `ggcore` writes the unit files deployments
+link, so neither the recipe author nor `ggcore` is less than root, on
+systemd as here. No critical or high findings.
+
+| Severity | Finding | Fixed in patch 0007 | Verified |
+| --- | --- | --- | --- |
+| Medium | A unit file line longer than the 768-byte read buffer was parsed in two pieces, the second as a setting of its own: a long `ComponentDescription` could add `X-GGL-ReadySocket=<path>`, which root unlinked at every start (PoC: root deleted a 0600 root file) | Lines fit the whole unit file; a line or value that does not fit fails the unit; only core units may name a readiness socket, removed only if it is a socket | PoC: file kept, unit runs; conformance `long_line` |
+| Medium | Unit output went through `syslog()`, which blocks once syslogd falls behind: a component writing fast enough stalled ggl-svcd and every IPC authentication (`whois` 6.5 s with a 1 ms/message syslogd) | Non-blocking log socket; while syslogd is behind, a unit's output waits in its pipe (the unit is slowed, nothing is lost); 1000 lines per 30 s per unit; requests served before output | PoC: `whois` 0.2 ms; on the board, see below |
+| Low | `X-GGL-ReadySocket` honoured for any unit, and its path unlinked whatever it was | As above | PoC |
+| Low | `whois` read `/proc/<pid>/cgroup` in 224-byte pieces and could match the rest of a long line (PoC, with a delegated cgroup; the board has no delegation) | Only whole lines match | PoC: `no unit` |
+| Low | No resource limits per unit; ggl-svcd could be OOM-killed | ggl-svcd exempt from the OOM killer, as PID 1 under systemd; units are not. Limits: not covered (`docs/architecture.md`) | On the board: `oom_score_adj` -1000 / 0 |
+| Low | `WorkingDirectory` entered as root, before dropping privileges (PoC: a unit read under a root-only directory) | Entered as the unit's user, as systemd | PoC; conformance `workdir_as_user` |
+| Low | Units inherited signals ggl-svcd was started with as ignored (SIGQUIT, from the init script's background job) | Every signal reset | PoC; on the board: `SigIgn` 0 |
+| Info | A linked unit could carry a core unit's name; a stale comment on caller identity; the docs overstated what running units from a copy protects | Refused at load; comment and `docs/architecture.md` corrected | |
+| Info | Caller identity looked up by PID after connect (as `sd_pid_get_unit()`); `signal_cgroup` SIGTERMs PIDs one by one (SIGKILL uses `cgroup.kill`); components share one user and can read each other's IPC tokens (upstream default) | Not changed; documented under "Not covered" | |
+
+The review also traced a possible injection through a configuration
+variable in a recipe's `Timeout`. It is not reachable in v2.7.0:
+`ggl-recipe` accepts `Timeout` only as an integer, or a string that
+parses as one, and rewrites it as digits before the unit file is
+written.
+
+On the board, with the image that has patch 0007 (one unit owned by
+`gg_component`, busybox syslogd):
+
+| | Before | After |
+| --- | --- | --- |
+| Burst of 100 / 300 / 1000 lines (`seq`) | (blocking `syslog()`) | all logged, none dropped |
+| First version of the fix, dropping on a full socket after 100 ms | | 3–4 %, 17 %, 15–19 % dropped: on one CPU core, syslogd cannot run while ggl-svcd sends, hence the change to hold output back |
+| `yes` writing as fast as it can | | 1000 lines per 30 s logged, rest counted as suppressed, none dropped; `systemctl show` 200 ms on average (87 ms idle), max 250 ms |
+
+The control-protocol and unit-file fuzzers, rebuilt with the changes,
+ran without findings, as did the 35 conformance checkpoints.
+
 ### Reboots and bootstrap deployments
 
 A cloud deployment of a component with a `bootstrap` step makes nucleus
@@ -294,6 +342,36 @@ before it, MemTotal was 14728 kB and MemAvailable 5680 kB. During a
 deployment MemAvailable dips to ~4.7 MiB. Afterwards `ggdeploymentd` keeps
 ~450 kB more heap (1156 kB vs 708 kB anonymous after two cloud
 deployments), so MemAvailable stays ~4.7 MiB until the next boot.
+
+### Memory margin
+
+`MemAvailable` overstates what is free: it counts page cache that holds
+program code, and the root file system is on NFS, so code evicted from
+RAM is read again over the network. The real margin was measured by
+taking memory away with an unswappable tmpfs balloon and, at each size,
+deploying and removing a small local component (`ggl-cli`), counting
+`workingset_refault_file` (file pages read again after eviction). Image
+with patch 0007, demo deployed, after the earlier tests of that boot
+(`Mapped` 4868 kB, `AnonPages` 4584 kB):
+
+| Balloon | MemAvailable before | lowest | File pages read again | Deploy | Remove | SSH command |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 4396 kB | 4088 kB | 3,597 (14 MiB) | 47 s | 34 s | 0.24 s |
+| 1 MiB | 3568 kB | 2124 kB | 24,137 (94 MiB) | 78 s | 113 s | 0.19 s |
+| 2 MiB | 2496 kB | 1048 kB | 452,030 (1.7 GiB) | 2094 s | `ggl-cli` failed | 23 s |
+
+So components have about 1 MiB: with 1 MiB taken, deployments slow down
+by half; with 2 MiB, the board thrashes (and recovers once the memory is
+returned). Even with nothing taken, a deployment reads code again. This
+also settles the systemd question: a trimmed systemd (no D-Bus daemon,
+udev or timesyncd; journald with no storage) would need an estimated 1.5
+to 2.5 MiB more than ggl-svc.
+
+The lever is the code itself: `Mapped` (file pages mapped by processes,
+mostly program code) is 4.3 to 5.4 MiB. Running it in place from NOR
+flash (cramfs XIP, which the kernel supports) would take it out of RAM,
+but the runtime files need about 7 MiB of flash in that form, against
+4 MiB for the root file system in the public flash layout.
 
 ### Functional checks
 

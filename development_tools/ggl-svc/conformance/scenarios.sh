@@ -462,11 +462,63 @@ EOF
 	done
 }
 
+# --- Found by the security review ----------------------------------------
+
+# A line longer than any read buffer, as a recipe's long description makes
+# it: the rest of the line must not count as a setting of its own.
+s_long_line() {
+	touch /tmp/t-victim
+	pad=$(printf '%2000s' '' | tr ' ' x)
+	unit t-long-line.service <<EOF
+[Unit]
+Description=${pad}X-GGL-ReadySocket=/tmp/t-victim
+[Service]
+Type=exec
+ExecStart=/bin/sleep 1013
+EOF
+	start t-long-line.service
+	sleep 1
+	settle t-long-line.service
+	record t-long-line.service started "victim=$(test -e /tmp/t-victim && echo kept || echo removed)"
+	stop t-long-line.service
+}
+
+# The working directory is entered as the unit's user: one only root can
+# reach fails the unit.
+s_workdir_as_user() {
+	mkdir -p /tmp/t-private/wd
+	chmod 0700 /tmp/t-private
+	chmod 0777 /tmp/t-private/wd
+	unit t-workdir.service <<'EOF'
+[Service]
+Type=oneshot
+User=ggtest
+WorkingDirectory=/tmp/t-private/wd
+ExecStart=/bin/true
+EOF
+	start t-workdir.service
+	settle t-workdir.service
+	record t-workdir.service ran
+}
+
+# Signals a unit starts with: none ignored or blocked.
+s_signals() {
+	unit t-signals.service <<'EOF'
+[Service]
+Type=oneshot
+User=ggtest
+ExecStart=/bin/sh -c 'grep -E "^Sig(Blk|Ign)" /proc/self/status | tr "\t\n" "  " >/tmp/t-signals'
+EOF
+	start t-signals.service
+	settle t-signals.service
+	record t-signals.service ran "$(cat /tmp/t-signals 2>/dev/null)"
+}
+
 all="exec_runs exec_exit0 exec_exit1 success_status killed_by_signal
 start_limit restart_recovers restart_always manual_restart_resets oneshot
 oneshot_remain oneshot_fails oneshot_timeout notify_ready notify_never_ready
 notify_timeout notify_ignored stop_kills_group leftovers_killed stop_timeout
-binds_to wants_after environment"
+binds_to wants_after environment long_line workdir_as_user signals"
 
 for scenario in ${*:-$all}; do
 	"s_$scenario"

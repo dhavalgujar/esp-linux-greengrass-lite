@@ -2,10 +2,12 @@
 
 [AWS IoT Greengrass nucleus lite](https://github.com/aws-greengrass/aws-greengrass-lite)
 on the ESP32-S31 Function-CoreBoard, connected over Ethernet, built from
-public sources only. The complete nucleus runs in 16 MiB of RAM, with
-~5.5 MiB to spare: cloud and local deployments, component lifecycle and
-health, fleet status, IPC, MQTT to AWS IoT Core and the Token Exchange
-Service.
+public sources only. The complete nucleus runs in 16 MiB of RAM: cloud
+and local deployments, component lifecycle and health, fleet status, IPC,
+MQTT to AWS IoT Core and the Token Exchange Service. About 1 MiB is left
+for components: `MemAvailable` reads ~5 MiB, but most of that is program
+code the board needs again (measured: `development_tools/results.md`,
+"Memory margin").
 
 This repository is a Buildroot `BR2_EXTERNAL` tree on
 [espressif/esp-buildroot-external](https://github.com/espressif/esp-buildroot-external):
@@ -75,7 +77,7 @@ applied by Buildroot:
 | --- | --- | --- |
 | Recognize `riscv32` | Greengrass Lite, patch 0001 | Upstream only knows riscv64: platform matching and fleet status fail on RV32. |
 | Build without systemd (`GGL_PORTABLE_CORE`) | patch 0002 | systemd does not fit in 16 MiB (measured: no login after 12 minutes). |
-| `ggl-svc`, a service manager for the units Greengrass generates | patches 0003, 0006 | Upstream runs components as systemd units, reads their health over D-Bus and identifies IPC callers by their systemd cgroup. Why not an existing supervisor: `docs/architecture.md`. |
+| `ggl-svc`, a service manager for the units Greengrass generates | patches 0003, 0006, 0007 | Upstream runs components as systemd units, reads their health over D-Bus and identifies IPC callers by their systemd cgroup. Why not an existing supervisor: `docs/architecture.md`. |
 | Keep the IoT Jobs ID length on bootstrap resume | patch 0004 | Upstream bug, also on main: a cloud deployment with a bootstrap step never completes. |
 | Retry the fleet provisioning certificate request | patch 0005 | Upstream sends it after a fixed 5 s; the TLS connection takes ~11 s on this chip. |
 | Reset the whole chip on reboot | OpenSBI patch | The public firmware resets CPU core 0 only: `reboot` hangs the board. |

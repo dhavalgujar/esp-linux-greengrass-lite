@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Testing ggl-svc
 
-`ggl-svc` (patches 0003 and 0006) is a service manager written for this
+`ggl-svc` (patches 0003, 0006 and 0007) is a service manager written for this
 repository, standing in for systemd. Besides `development_tools/board-test.sh`, which
 runs Greengrass on the board, two workstation tests check it where it is
 most likely to be wrong or attackable. Both build ggl-svc from the pinned

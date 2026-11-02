@@ -23,7 +23,7 @@ which replaces exactly those four systemd dependencies:
 | `systemctl` | `/usr/bin/systemctl` front end for the commands `ggdeploymentd` issues: `link`, `enable`, `disable`, `start`, `stop`, `restart`, `daemon-reload`, `reset-failed`, `reboot` |
 | systemd D-Bus API (`gghealthd`) | `gghealthd` portable backend: unit state and change notifications from `ggl-svcd`, with the same mapping to Greengrass lifecycle states |
 | `sd_pid_get_unit` (`ggipcd` authentication) | `ggipc-auth` asks `ggl-svcd` (`whois <pid>`), which answers from the caller's cgroup (`/proc/<pid>/cgroup`) |
-| journald | `ggl-svcd` forwards each unit's output, line by line and tagged with the unit, to busybox syslogd (`/var/log/messages`, rotated) |
+| journald | `ggl-svcd` forwards each unit's output, line by line and tagged with the unit, to busybox syslogd (`/var/log/messages`, rotated), without ever blocking on it |
 
 Everything above the service manager is upstream Greengrass Lite: the same
 deployment daemon, recipe-to-unit generator, recipe runner, IPC, MQTT, TES
@@ -37,8 +37,10 @@ gives Linux about 14.7 MiB. A glibc/systemd image of the same stack was
 built and booted: it thrashes before Greengrass starts and takes over 12
 minutes to reach a login (`development_tools/results.md`; the configuration is kept,
 reproducibly, in `development_tools/systemd-evaluation`). The busybox image runs the
-complete Greengrass Lite daemon set with ~5.5 MiB to spare. How the
-systemd dependencies are replaced: below.
+complete Greengrass Lite daemon set, with about 1 MiB of real margin left
+(`development_tools/results.md`, "Memory margin"): too little for even a
+trimmed systemd, which would need an estimated 1.5 to 2.5 MiB more. How
+the systemd dependencies are replaced: below.
 
 ## Why a purpose-built service manager
 
@@ -86,13 +88,17 @@ upstream. What establishes trust in it:
 - **conformance with systemd** (`development_tools/ggl-svc/conformance`): the same
   unit scenarios, of the kinds Greengrass generates, run under systemd
   and under ggl-svcd; every checkpoint (ActiveState, Result, NRestarts,
-  leftover processes, environment) must match. 32 of 32 do; the first
-  run found five differences, which patch 0006 fixes;
+  leftover processes, environment) must match. 35 of 35 do; the first
+  run found five differences, which patch 0006 fixes, and a scenario
+  added with the security review one more (SIGPIPE), fixed by 0007;
 - **fuzzing** (`development_tools/ggl-svc/fuzz`) of its untrusted inputs, the unit
   file parser and the control protocol, under AddressSanitizer and
   UndefinedBehaviorSanitizer;
-- two independent reviews (findings and fixes in `development_tools/results.md`), and
-  `development_tools/board-test.sh`, which exercises it on the board.
+- two independent reviews, and a third, adversarial **security review**
+  against a malicious component, a compromised `ggcore` daemon and any
+  local user, with proofs of concept; its two medium findings and five
+  low ones are fixed in patch 0007 (all in `development_tools/results.md`);
+- `development_tools/board-test.sh`, which exercises it on the board.
 
 On a board with enough memory for systemd (32 MiB, as the July proof
 of this stack showed), upstream's systemd build would need no ggl-svc.
@@ -151,11 +157,26 @@ Units linked and enabled by deployments persist in `/var/lib/ggl-svc`,
 which only root can write, so deployed components start again at boot,
 like `greengrass-lite.target` on systemd. `systemctl link` also copies the
 unit file there, and the unit runs from that copy. `ggdeploymentd` writes
-unit files into `/var/lib/greengrass`, which the `ggcore` user can write.
-Running from the copy keeps `ggcore` from replacing a linked unit file
-later with one that runs as root. Every deployment links its units again
-before starting them, so the copy is always current. Systemd hosts read the
-linked file itself.
+unit files into `/var/lib/greengrass`, which the `ggcore` user can write;
+running from the copy means a unit file changed after it was linked is not
+read again (systemd re-reads the linked file at every `daemon-reload`).
+This does not make `ggcore` less than root: it writes the unit files a
+deployment links, and a recipe may ask to run as root
+(`RequiresPrivilege`), as on any Greengrass host. Every deployment links
+its units again before starting them, so the copy is always current.
+
+The parser fails a unit rather than guess: a line or value that does not
+fit is an error, never cut short or read as two lines. Only the core
+units in `/usr/lib/ggl-svc` may name a readiness socket
+(`X-GGL-ReadySocket`).
+
+Unit output reaches syslogd without ever blocking `ggl-svcd`: when
+syslogd falls behind, `ggl-svcd` stops reading that unit's output, which
+waits in the unit's pipe, so the unit is slowed down and nothing is lost,
+as under journald. Each unit may log 1000 lines per 30 s; beyond that,
+lines are counted and reported as suppressed (journald rate-limits per
+unit too). Requests are served before unit output. `ggl-svcd` is exempt
+from the OOM killer, as systemd's PID 1; its units are not.
 
 Control is a line protocol on `/run/ggl-svc.sock` (`ggl/svc.h`). Requests
 are read without blocking the service manager, and a non-root user can
@@ -191,7 +212,17 @@ Privileges follow the upstream units: `ggconfigd`, `ggpubsubd`, `ggipcd`,
 ## Not covered
 
 - resource limits (systemd slices and cgroup controllers) for
-  components;
+  components: a component can exhaust the board's memory or fork
+  without limit. systemd's default task limit (15% of `pid_max`, ~600
+  here) would not prevent memory exhaustion in 16 MiB, and the memory
+  controller costs more RAM than the board can spare;
+- isolation between components: as with upstream's default, they all run
+  as `gg_component`, so each can read the others' environment, including
+  their IPC tokens. A separate `posixUser` per component closes this;
+- the caller identity `whois` returns is looked up by PID after the
+  caller connects, as `sd_pid_get_unit()` does under systemd: a caller
+  that exits and whose PID is reused in between is misidentified. Using
+  `SO_PEERPIDFD` would close it;
 - when a component is removed, upstream disables only its run unit and
   reloads before it deletes the unit files. Under systemd this leaves
   dangling links for the install and bootstrap units. Here those

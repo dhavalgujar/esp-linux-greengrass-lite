@@ -5,10 +5,7 @@
 // contents. Unit files come from deployments, so their contents are not
 // trusted.
 
-// Logging to syslog would dominate the run time: drop it.
-#include <syslog.h>
-#define syslog(...) ((void) 0)
-#define vsyslog(...) ((void) 0)
+// Logging goes nowhere: run.sh points GGL_SVC_LOG_PATH at no socket.
 
 #define main ggl_svcd_main
 #include "ggl-svcd.c"
