@@ -6,7 +6,7 @@ an AP/router with Internet access. AWS region us-east-1. Until 2026-10-29
 the board used a manually provisioned Thing, `esp32s31-fcb-eth`; since
 2026-10-30 it provisions itself as `esp32s31-greengrass-32eda0ed7875` in
 fleet `esp32s31-greengrass`. NFS root served from a workstation on the same
-subnet. Measured 2026-10-28..30.
+subnet. Measured 2026-10-28..11-02.
 
 ## Shipped configuration: `esp32s31_fcb_greengrass_defconfig`
 
@@ -109,9 +109,27 @@ Once, after such a reset, a cloud deployment failed in cloud resolution:
 `ggdeploymentd`'s first data plane request returned 200, the next failed
 in curl, and every request after it failed too, 4 minutes later as well,
 until `ggdeploymentd` was restarted; the next deployment then succeeded.
-Four repetitions (two plain reboots, two resets) did not reproduce it. This
-libcurl is built without error strings (curl reports only "Error"), so the
-cause is not known; `BR2_PACKAGE_LIBCURL_VERBOSE` would name it.
+Four repetitions (two plain reboots, two resets) did not reproduce it.
+
+On 2026-11-02 a similar failure ended two of three end-to-end runs at
+10/14 (the default configuration). Each time, it hit the first cloud
+deployment after the bootstrap reboot: `ggdeploymentd`'s data plane
+request returned 200, then `tesd`'s single request for TES credentials
+failed in curl ~6 s after it started. Upstream retries only timeouts and
+connection, TLS-connect and transfer errors, and `ggdeploymentd` does not
+ask again, so the deployment failed. The removal, health and cold-reset
+checks that need the demo deployed then failed with it. Neither DNS (400
+lookups of both endpoints on the board through musl's resolver, none
+failed or slow) nor the endpoint (the same request from the workstation
+with the device's certificate: 200, three times) showed a fault.
+
+That libcurl was built without error strings (curl reported only "Error").
+The image now enables `BR2_PACKAGE_LIBCURL_VERBOSE`, which names the error
+in the log (`Curl request failed due to error: …`). It costs ~36 kB of
+MemAvailable (5604 kB vs 5640 kB, 3 minutes after a cold boot) and changes
+`rootfs.tar` only (to `217f4e84…`; the flash image is unchanged). With it,
+five consecutive end-to-end runs passed 14/14, and the failure did not
+recur. The cause is still unknown: if it recurs, the log now names it.
 
 ### Device identity: fleet provisioning
 
