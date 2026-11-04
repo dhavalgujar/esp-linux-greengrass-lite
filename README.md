@@ -7,7 +7,9 @@ and local deployments, component lifecycle and health, fleet status, IPC,
 MQTT to AWS IoT Core and the Token Exchange Service. About 1 MiB is left
 for components: `MemAvailable` reads ~5 MiB, but most of that is program
 code the board needs again (measured: `development_tools/results.md`,
-"Memory margin").
+"Memory margin"). Executing that code in place from flash would triple
+the margin; that is measured as an experiment, not part of this
+configuration (`development_tools/xip`).
 
 This repository is a Buildroot `BR2_EXTERNAL` tree on
 [espressif/esp-buildroot-external](https://github.com/espressif/esp-buildroot-external):

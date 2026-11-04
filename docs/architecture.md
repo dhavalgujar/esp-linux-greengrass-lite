@@ -39,8 +39,11 @@ minutes to reach a login (`development_tools/results.md`; the configuration is k
 reproducibly, in `development_tools/systemd-evaluation`). The busybox image runs the
 complete Greengrass Lite daemon set, with about 1 MiB of real margin left
 (`development_tools/results.md`, "Memory margin"): too little for even a
-trimmed systemd, which would need an estimated 1.5 to 2.5 MiB more. How
-the systemd dependencies are replaced: below.
+trimmed systemd, which would need an estimated 1.5 to 2.5 MiB more.
+Executing program code in place from flash raises the margin to about
+3 MiB, but takes all the flash after the kernel for Greengrass's own
+code, so systemd's code would run from RAM. How the systemd dependencies
+are replaced: below.
 
 ## Why a purpose-built service manager
 

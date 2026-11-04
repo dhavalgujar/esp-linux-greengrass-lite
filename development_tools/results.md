@@ -392,10 +392,56 @@ udev or timesyncd; journald with no storage) would need an estimated 1.5
 to 2.5 MiB more than ggl-svc.
 
 The lever is the code itself: `Mapped` (file pages mapped by processes,
-mostly program code) is 4.3 to 5.4 MiB. Running it in place from NOR
-flash (cramfs XIP, which the kernel supports) would take it out of RAM,
-but the runtime files need about 7 MiB of flash in that form, against
-4 MiB for the root file system in the public flash layout.
+mostly program code) is 4.3 to 5.4 MiB. See the next section.
+
+### Executing program code from flash (XIP)
+
+Measured with the root file system still on NFS: the program code of
+chosen files is executed in place from cramfs images in the NOR flash
+(`development_tools/xip`), the rest of each file and everything else as
+before. Each case on a freshly booted board, with the image of `af35050`,
+the demo deployed, and `development_tools/memory-margin.sh`'s procedure.
+
+What occupies RAM: read-only and executable file pages mapped by the
+running processes, by file (PSS), totalled 6.9 MB. `libcrypto.so.3` alone
+holds 3.0 MB of it; then musl (634 kB), busybox (629 kB), SQLite (560
+kB), dropbear (356 kB), libevent, ggdeploymentd, libssl and libcurl
+(200–270 kB each), and the other daemons.
+
+| | A: none | B: 3 files in place | C: 16 files in place |
+| --- | ---: | ---: | ---: |
+| Files | | libcrypto, ggdeploymentd, libevent | B's, plus musl, busybox, SQLite, libz, libyaml, libuuid, libatomic and the daemons but tesd, ggpubsubd, tes-serverd |
+| Flash used | | 4.1 MB (the BSP's 4 MiB rootfs slot) | 7.2 MB (flash 0x870000–0xF70000, three windows) |
+| `Mapped` at 4 min | 5.86 MB | 4.3 MB | 2.8 MB |
+| `MemFree` at 4 min | 0.7 MB | 0.7 MB | 2.0 MB |
+| File pages read again by 4 min (3 boots each) | 820–914 | 0 | 0 |
+| Deploy / remove, nothing taken | 52 / 39 s | 38 / 25 s | 39 / 25 s |
+| … with 1 MiB taken | 85 / 72 s | 37 / 21 s | 38 / 25 s |
+| … with 2 MiB taken | no result after 2137 s (thrashing) | 44 / 31 s | 39 / 25 s |
+| … with 3 MiB taken | | FAILED (439 s) | 39 / 26 s |
+| … with 4 MiB taken | | | no result (memory exhausted, 276 kB available) |
+| Usable margin | 1 MiB | 2 MiB | 3 MiB |
+| TLS connection to AWS IoT Core at boot | 11, 13, 12 s | 11, 9, 10, 9 s | 9 s |
+
+`MemAvailable` hardly differs (5.1 to 5.6 MB in all three): it counted
+the code's page cache as available before. What changes is that code is
+no longer evicted and read again over the network: deployments get
+faster and the board stops thrashing until memory is really exhausted.
+Code executed from flash is not slower here (TLS and deployments are
+faster), and all local end-to-end checks (`board-test.sh` without
+`--cloud`, 7/7) pass with case C.
+
+Found on the way: `mkcramfs -X` alone lays files out for Linux without
+an MMU, and the kernel then copies them to RAM after all; with an MMU it
+takes `-X -X`. The physmap driver rounds an MTD window down to a power
+of two, so a 7 MiB window is 4 MiB; three windows (4, 2 and 1 MiB) cover
+the flash after the kernel.
+
+As a product configuration this would need the root file system in flash
+(the BSP's cramfs root, built with `-X -X`, in a larger slot) rather than
+copies bound over an NFS root, and it uses all flash after the kernel,
+leaving 53 kB for the kernel to grow and 576 kB unused. Not part of the
+shipped configuration.
 
 ### Functional checks
 
