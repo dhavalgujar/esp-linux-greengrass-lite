@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+# Espressif's kernel runs Linux on both cores (SMP) since its November 2026
+# integration branch. Here it costs more than it gives: 336 kB of MemTotal,
+# about 1 MB of MemAvailable and 0.4 MB of kernel in flash. On 16 MiB the
+# board then has no memory margin left, and deployments fail
+# (development_tools/results.md). One core, as before.
+# CONFIG_SMP is not set

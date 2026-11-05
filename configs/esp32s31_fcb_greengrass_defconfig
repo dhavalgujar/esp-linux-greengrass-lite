@@ -46,9 +46,9 @@ BR2_ROOTFS_POST_IMAGE_SCRIPT_ARGS="nor"
 # Boot stack: Espressif's public integration branches, pinned by commit.
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
-BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/linux/archive/b3bd414d03b8eebb2e44edf08c86058d55e403b3/linux-b3bd414d03b8eebb2e44edf08c86058d55e403b3.tar.gz"
+BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/linux/archive/19629799860d68d21546b7d7a45d4d86bdc88b81/linux-19629799860d68d21546b7d7a45d4d86bdc88b81.tar.gz"
 BR2_LINUX_KERNEL_DEFCONFIG="esp32s31_minimal"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-nfsroot.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-ggl-svc.fragment $(BASE_DIR)/nfsroot-cmdline.fragment"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-nfsroot.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-uniprocessor.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-ggl-svc.fragment $(BASE_DIR)/nfsroot-cmdline.fragment"
 BR2_LINUX_KERNEL_IMAGE_TARGET_CUSTOM=y
 BR2_LINUX_KERNEL_IMAGE_TARGET_NAME="xipImage"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
@@ -61,7 +61,7 @@ BR2_TARGET_OPENSBI_ADDITIONAL_VARIABLES="PLATFORM_DEFCONFIG=esp32s31_defconfig P
 BR2_TARGET_UBOOT=y
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
 BR2_TARGET_UBOOT_CUSTOM_TARBALL=y
-BR2_TARGET_UBOOT_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/u-boot/archive/333c7a31f49d0ecc796edc7b6f7d44c4fcd1e9f8/u-boot-333c7a31f49d0ecc796edc7b6f7d44c4fcd1e9f8.tar.gz"
+BR2_TARGET_UBOOT_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/u-boot/archive/e5dff8d374ae3f68c1a3a09346be0cfb17b7df60/u-boot-e5dff8d374ae3f68c1a3a09346be0cfb17b7df60.tar.gz"
 BR2_TARGET_UBOOT_BOARD_DEFCONFIG="espressif_esp32s31"
 BR2_TARGET_UBOOT_NEEDS_OPENSBI=y
 BR2_TARGET_UBOOT_USE_BINMAN=y
