@@ -382,16 +382,23 @@ device_registered() {
 			--query 'length(principals)' --output text)" -ge 1 ]
 }
 
+# Waits for SSH, for at least 5 minutes: under systemd the board answers
+# 2 to 2.5 minutes after a reset.
+wait_for_ssh() {
+	for i in $(seq 1 150); do
+		board true 2>/dev/null && return 0
+		sleep 2
+	done
+	return 1
+}
+
 # Resets the board through its serial port and waits for SSH.
 cold_reset() {
 	esptool=${ESP_ESPTOOL:-esptool}
 	mac=$("$esptool" --port "$reset_port" read-mac 2>&1 |
 		sed -n 's/^MAC: *//p' | head -n 1 | tr '[:upper:]' '[:lower:]')
 	[ "$mac" = "$(printf '%s' "$reset_mac" | tr '[:upper:]' '[:lower:]')" ] || return 1
-	for i in $(seq 1 90); do
-		board true 2>/dev/null && break
-		sleep 2
-	done
+	wait_for_ssh
 }
 
 # Persistent storage: the same device comes back, with what was deployed.
@@ -415,6 +422,9 @@ fresh_after_reset() {
 	fi
 	! board 'linked_units' | grep -q Hello
 }
+
+# The board may still be booting, from a flash or a reset just before.
+wait_for_ssh || { echo "no SSH from root@$ip" >&2; exit 1; }
 
 # Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
 # runs as gg_component and must be able to read them (hence umask 022
