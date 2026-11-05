@@ -61,13 +61,48 @@ hello=com.espressif.esp32s31.Hello
 bootstrap=com.espressif.esp32s31.BootstrapTest
 failures=0
 
+# Every command on the board gets these, so that the checks hold under
+# ggl-svc (this repository's image) and under systemd (upstream's service
+# model, development_tools/systemd-evaluation):
+#   log            the system log so far (both files of a rotated log)
+#   since MARK     the log from the line holding MARK (logger(1) wrote it)
+#   unit_show U..  "<unit> <ActiveState> <Result> <NRestarts>
+#                  <InactiveEnterTimestampMonotonic>" per unit
+#   core_status    unit_show for the core units
+#   linked_units   the units deployments linked
+prelude='if [ -d /run/systemd/system ]; then
+	log() { journalctl -q --no-pager -o short; }
+	unit_show() {
+		for u; do
+			printf "%s %s %s %s %s\n" "$u" \
+				"$(systemctl show -P ActiveState "$u")" \
+				"$(systemctl show -P Result "$u")" \
+				"$(systemctl show -P NRestarts "$u")" \
+				"$(systemctl show -P InactiveEnterTimestampMonotonic "$u")"
+		done
+	}
+	core_status() {
+		unit_show $(systemctl list-units --all --plain --no-legend \
+			"ggl.core.*.service" "ggl.aws.*.service" | cut -d" " -f1)
+	}
+	linked_units() { ls /etc/systemd/system | grep "^ggl\."; }
+else
+	log() { cat /var/log/messages.0 /var/log/messages 2>/dev/null; }
+	unit_show() { for u; do systemctl show "$u"; done; }
+	core_status() { /etc/init.d/S95greengrass status; }
+	linked_units() { ls /var/lib/ggl-svc/links; }
+fi
+since() { log | sed -n "/$1/,\$p"; }
+mark() { m="board-test-$$-$(date +%s)"; logger -t board-test "$m"; echo "$m"; }
+'
+
 # A board that goes away mid-command fails the command within ~30 s instead
 # of leaving the session waiting for TCP to time out.
 board() {
 	ssh -i "$key" -o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
 		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
 		-o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-		-o BatchMode=yes "root@$ip" "$@"
+		-o BatchMode=yes "root@$ip" "$prelude" "$@"
 }
 check() {
 	name=$1
@@ -78,7 +113,7 @@ check() {
 		echo "FAIL  $name"
 		failures=$((failures + 1))
 		# /var/log is a tmpfs: show the evidence before a reset loses it.
-		board 'grep -E "ggdeploymentd|ggl-svcd: ggl\.|recipe-runner|E\[" /var/log/messages |
+		board 'log | grep -E "ggdeploymentd|ggl-svcd: ggl\.|recipe-runner|E\[" |
 			grep -v core_mqtt | tail -n 15' 2>/dev/null | sed 's/^/      /'
 	fi
 }
@@ -86,23 +121,22 @@ check() {
 # Runs a local deployment on the board and prints the job's final status.
 local_deploy() {
 	board '
-		L=/var/log/messages
-		n0=$(grep -c "reporting job as" $L)
+		m=$(mark)
 		/usr/bin/ggl-cli deploy '"$*"' >/dev/null 2>&1 || exit 1
 		for i in $(seq 1 100); do
-			[ "$(grep -c "reporting job as" $L)" -gt "$n0" ] && break
+			since "$m" | grep -q "reporting job as" && break
 			sleep 3
 		done
-		grep "reporting job as" $L | tail -n 1 | sed "s/.*reporting job as //; s/\.$//"'
+		since "$m" | grep "reporting job as" | tail -n 1 | sed "s/.*reporting job as //; s/\.$//"'
 }
 
 core_units_healthy() {
-	out=$(board '/etc/init.d/S95greengrass status | grep "^ggl\.\(core\|aws\)"')
+	out=$(board 'core_status | grep "^ggl\.\(core\|aws\)"')
 	[ "$(printf '%s\n' "$out" | grep -c ' active success 0 ')" -eq 9 ]
 }
 
 hello_unit_active() {
-	board "systemctl show ggl.$hello.service 2>/dev/null" | grep -q ' active '
+	board "unit_show ggl.$hello.service 2>/dev/null" | grep -q ' active '
 }
 
 hello_passes_after_local_deploy() {
@@ -110,14 +144,14 @@ hello_passes_after_local_deploy() {
 	# and the demo just has to keep running.
 	was_active=0
 	hello_unit_active && was_active=1
-	n0=$(board 'grep -c "hello: PASS" /var/log/messages')
+	m=$(board mark)
 	[ "$(local_deploy -r /usr/share/esp32s31-ggl-hello -c $hello=1.0.0)" = SUCCEEDED ] || return 1
 	if [ "$was_active" = 1 ]; then
 		hello_unit_active
 		return
 	fi
 	board 'for i in $(seq 1 60); do
-			[ "$(grep -c "hello: PASS" /var/log/messages)" -gt '"$n0"' ] && exit 0
+			since '"$m"' | grep -q "hello: PASS" && exit 0
 			sleep 2
 		done; exit 1'
 }
@@ -151,13 +185,13 @@ EOF'
 	# Failed after 3 restarts, which gghealthd reports as BROKEN. As under
 	# systemd, the start limit keeps the failure's Result (exit-code).
 	state=$(board 'for i in $(seq 1 30); do
-			s=$(systemctl show ggl.com.espressif.esp32s31.FailTest.service)
+			s=$(unit_show ggl.com.espressif.esp32s31.FailTest.service)
 			case $s in *" failed exit-code 3 "*) break ;; esac
 			sleep 2
 		done; echo "$s"')
 	case $state in *" failed exit-code 3 "*) ;; *) return 1 ;; esac
 	[ "$(local_deploy -d com.espressif.esp32s31.FailTest)" = SUCCEEDED ] || return 1
-	board '! ls /var/lib/ggl-svc/links | grep -q FailTest'
+	board '! linked_units | grep -q FailTest'
 }
 
 # A component with install and startup phases: exercises
@@ -181,8 +215,8 @@ Manifests:
         Script: "echo phasetest started"
 EOF'
 	[ "$(local_deploy -r /tmp/phasetest -c com.espressif.esp32s31.PhaseTest=1.0.0)" = SUCCEEDED ] || return 1
-	states=$(board 'systemctl show ggl.com.espressif.esp32s31.PhaseTest.install.service;
-		systemctl show ggl.com.espressif.esp32s31.PhaseTest.service')
+	states=$(board 'unit_show ggl.com.espressif.esp32s31.PhaseTest.install.service \
+		ggl.com.espressif.esp32s31.PhaseTest.service')
 	# The generated install unit has RemainAfterExit=true (active once it
 	# succeeded); the startup unit must have run and then finished.
 	printf '%s\n' "$states" |
@@ -197,7 +231,7 @@ local_root_removed() {
 	# With --cloud the group no longer lists the demo either (see
 	# cloud_removal_succeeds), so it must be gone entirely.
 	[ "$cloud" = 1 ] || return 0
-	board '! ls /var/lib/ggl-svc/links | grep -q Hello' &&
+	board '! linked_units | grep -q Hello' &&
 		! hello_unit_active
 }
 
@@ -284,7 +318,7 @@ EOF
 	wait_cloud_deployment "$(group_deploy "bootstrap and reboot" \
 		"{\"$bootstrap\":{\"componentVersion\":\"1.0.0\"}}")" || return 1
 	[ "$(board 'cat /proc/sys/kernel/random/boot_id')" != "$boot0" ] &&
-		board "systemctl show ggl.$bootstrap.service" | grep -q ' active '
+		board "unit_show ggl.$bootstrap.service" | grep -q ' active '
 }
 
 # The demo deployment replaced the test component's: nothing of it may run
@@ -293,8 +327,8 @@ EOF
 # only the run unit and reloads before deleting the unit files.) Then remove
 # it from the account.
 bootstrap_component_deleted() {
-	units=$(board 'for u in /var/lib/ggl-svc/links/*BootstrapTest*; do
-			[ -L "$u" ] && systemctl show "${u##*/}"
+	units=$(board 'for u in $(linked_units | grep BootstrapTest); do
+			unit_show "$u"
 		done; true') || return 1
 	! printf '%s\n' "$units" | grep -Eq "BootstrapTest\.service | (active|activating) " &&
 		aws greengrassv2 delete-component --arn "$(bootstrap_arn)"
@@ -327,7 +361,7 @@ provisioned_and_running() {
 	board 'for i in $(seq 1 120); do
 			{ [ -s /var/lib/greengrass/credentials/device.pem.crt ] ||
 				[ -s /var/lib/greengrass/credentials/certificate.pem ]; } &&
-				[ "$(/etc/init.d/S95greengrass status | grep -c " active ")" -ge 9 ] &&
+				[ "$(core_status | grep -c " active ")" -ge 9 ] &&
 				exit 0
 			sleep 5
 		done; exit 1' || return 1
@@ -361,7 +395,7 @@ cold_reset() {
 comes_back_after_reset() {
 	cert0=$(device_certificate)
 	cold_reset || return 1
-	board 'for i in $(seq 1 150); do grep -q "hello: PASS" /var/log/messages && exit 0; sleep 1; done; exit 1' &&
+	board 'for i in $(seq 1 150); do log | grep -q "hello: PASS" && exit 0; sleep 1; done; exit 1' &&
 		core_units_healthy && [ "$(device_certificate)" = "$cert0" ]
 }
 
@@ -376,7 +410,7 @@ fresh_after_reset() {
 	else
 		[ "$(device_certificate)" != "$cert0" ] || return 1
 	fi
-	! board 'ls /var/lib/ggl-svc/links' | grep -q Hello
+	! board 'linked_units' | grep -q Hello
 }
 
 # Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
