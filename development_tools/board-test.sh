@@ -71,14 +71,15 @@ failures=0
 #   core_status    unit_show for the core units
 #   linked_units   the units deployments linked
 prelude='if [ -d /run/systemd/system ]; then
-	log() { journalctl -q --no-pager -o short; }
+	log() { journalctl -q --no-pager -o short ${1:+--since=@$1}; }
 	unit_show() {
 		for u; do
-			printf "%s %s %s %s %s\n" "$u" \
-				"$(systemctl show -P ActiveState "$u")" \
-				"$(systemctl show -P Result "$u")" \
-				"$(systemctl show -P NRestarts "$u")" \
-				"$(systemctl show -P InactiveEnterTimestampMonotonic "$u")"
+			systemctl show -p ActiveState -p Result -p NRestarts \
+				-p InactiveEnterTimestampMonotonic "$u" |
+				awk -F= -v u="$u" "{ v[\$1] = \$2 } END {
+					print u, v[\"ActiveState\"], v[\"Result\"],
+						v[\"NRestarts\"],
+						v[\"InactiveEnterTimestampMonotonic\"] }"
 		done
 	}
 	core_status() {
@@ -92,7 +93,9 @@ else
 	core_status() { /etc/init.d/S95greengrass status; }
 	linked_units() { ls /var/lib/ggl-svc/links; }
 fi
-since() { log | sed -n "/$1/,\$p"; }
+# The journal is read from the marker'"'"'s second on (the whole of it is
+# slow to read on this board); the marker line itself bounds the result.
+since() { log "${1##*-}" | sed -n "/$1/,\$p"; }
 mark() { m="board-test-$$-$(date +%s)"; logger -t board-test "$m"; echo "$m"; }
 '
 
