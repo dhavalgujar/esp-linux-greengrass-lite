@@ -1,43 +1,45 @@
 # SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
-# ESP32-S31 Function-CoreBoard, Ethernet, Greengrass Lite portable core.
+# ESP32-S31 Function-CoreBoard with 32 MiB of PSRAM, Ethernet: AWS IoT
+# Greengrass nucleus lite as upstream runs it, under systemd.
 #
-# Espressif's public toolchain and boot stack (as in esp-buildroot-external's
-# espressif_esp32s31_function_core_board_nor_defconfig): musl, busybox init.
-# Greengrass runs as the systemd-free daemon subset. Development profile:
-# root filesystem over NFSv3, see scripts/build.sh.
+# Espressif's public boot stack and kernel (as in esp-buildroot-external's
+# espressif_esp32s31_function_core_board_nor_defconfig); a glibc toolchain
+# built by Buildroot, which systemd requires. Development profile: root
+# filesystem over NFSv3, see scripts/build.sh.
 
 # Try Buildroot's source mirror first: some packages (glibc) otherwise
 # clone their complete upstream git history.
 BR2_PRIMARY_SITE="https://sources.buildroot.net"
 
-# Architecture and toolchain: identical to the public defconfig.
+# Architecture: RV32IMAC, soft float, as the public toolchain targets.
 BR2_riscv=y
 BR2_riscv_custom=y
 BR2_RISCV_ISA_RVM=y
 BR2_RISCV_ISA_RVA=y
 BR2_RISCV_ISA_RVC=y
 BR2_RISCV_32=y
-BR2_TOOLCHAIN_EXTERNAL=y
-BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
-BR2_TOOLCHAIN_EXTERNAL_URL="https://dl.espressif.com/dl/toolchains/preview/riscv64/14.1.1_20260922/riscv64-esp-linux-musl-14.1.1_20260922-$(HOSTARCH)-linux-gnu.tar.xz"
-BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="riscv64-esp-linux-musl"
-BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_6=y
-BR2_TOOLCHAIN_EXTERNAL_CUSTOM_MUSL=y
-BR2_TOOLCHAIN_EXTERNAL_CXX=y
+BR2_RISCV_ABI_ILP32=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_KERNEL_HEADERS_AS_KERNEL=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
 
 # System
+BR2_INIT_SYSTEMD=y
 BR2_TARGET_GENERIC_HOSTNAME="esp32s31-ggl"
-BR2_TARGET_GENERIC_ISSUE="ESP32-S31 Greengrass Lite (portable core)"
-# BR2_TARGET_GENERIC_GETTY is not set
+BR2_TARGET_GENERIC_ISSUE="ESP32-S31 Greengrass Lite"
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 BR2_SYSTEM_DHCP=""
+BR2_PACKAGE_SYSTEMD_TIMESYNCD=y
 # Every download is hash-checked: Buildroot's own packages, ours, and (in
-# the global patch dir) the pinned kernel, U-Boot, OpenSBI, toolchain and
+# the global patch dir) the pinned kernel, U-Boot, OpenSBI and
 # esp-linux-bsp archives.
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 # Bit-for-bit reproducible images: fixed timestamps, no build paths.
 BR2_REPRODUCIBLE=y
-BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/patches"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/patches $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/patches-32mib"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/rootfs_overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ESP_LINUX_BSP_PATH)/board/espressif/esp32s31/post-image.sh"
@@ -48,10 +50,12 @@ BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="https://github.com/espressif/linux/archive/19629799860d68d21546b7d7a45d4d86bdc88b81/linux-19629799860d68d21546b7d7a45d4d86bdc88b81.tar.gz"
 BR2_LINUX_KERNEL_DEFCONFIG="esp32s31_minimal"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-nfsroot.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-uniprocessor.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-ggl-svc.fragment $(BASE_DIR)/nfsroot-cmdline.fragment"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-nfsroot.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-uniprocessor.fragment $(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/linux-systemd.fragment $(BASE_DIR)/nfsroot-cmdline.fragment"
 BR2_LINUX_KERNEL_IMAGE_TARGET_CUSTOM=y
 BR2_LINUX_KERNEL_IMAGE_TARGET_NAME="xipImage"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
+# Espressif's device tree; board/esp32s31-fcb/patches-32mib/linux gives it
+# all 32 MiB of the PSRAM.
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="espressif/esp32s31"
 BR2_TARGET_OPENSBI=y
 BR2_TARGET_OPENSBI_CUSTOM_TARBALL=y
@@ -72,7 +76,6 @@ BR2_TARGET_UBOOT_SPL_NAME="spl/u-boot-spl-dtb.bin"
 BR2_PACKAGE_HOST_ESP_LINUX_BSP=y
 
 # Userspace
-BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_ESP32S31_GGL_PATH)/board/esp32s31-fcb/busybox.fragment"
 BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_LIBCURL_OPENSSL=y
 # Greengrass logs curl_easy_strerror(): without these strings, every HTTPS

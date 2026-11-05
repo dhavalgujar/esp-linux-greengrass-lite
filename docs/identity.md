@@ -11,13 +11,21 @@ board has to do:
 
 | | |
 | --- | --- |
-| `/var/lib/greengrass` | Greengrass's rootPath: credentials, configuration database, deployed components |
-| `/var/lib/ggl-svc` | the units deployments linked and enabled (root only) |
+| `/var/lib/greengrass` | Greengrass's rootPath: credentials, configuration database, deployed components, the unit files of deployed components |
 
 A board with persistent storage (an SD card, USB storage, a NAND or flash
 partition, NFS) mounts it on `/var/lib` in `/etc/fstab`. Without it,
-`/etc/init.d/S95greengrass` mounts a RAM file system there, and the device
-starts fresh at every boot.
+`esp32s31-ggl-identity.service` mounts a RAM file system there, and the
+device starts fresh at every boot.
+
+That service (`/usr/libexec/esp32s31-ggl/identity`) runs once at boot,
+after `/var/lib` is mounted and before any Greengrass unit starts. It sets
+up the state directory, applies a connection kit if there is a new one,
+and then has systemd load the unit files again: Greengrass links the units
+of deployed components from `/var/lib/greengrass` into
+`/etc/systemd/system`, and when `/var/lib` is a separate mount, as here,
+systemd first loads them before it is mounted and finds nothing. Without
+this, deployed components would not start again after a reboot.
 
 ## Identity: a connection kit per board (default)
 
@@ -49,29 +57,21 @@ kit changes the identity once, and reflashing the same one changes nothing.
 A kit for a different device starts the device over: its configuration and
 deployments go, as they belong to the previous identity.
 
-## Alternative: fleet provisioning
+## Fleet provisioning: not on this board yet
 
-With `scripts/aws-provision.sh <fleet>` (no `--device`) and
-`scripts/nfs-deploy.sh --claim <fleet>`, the image carries a claim
-certificate instead, and a device without credentials provisions itself at
-boot with [AWS IoT fleet
-provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html)
-(Greengrass Lite's `fleet-provisioning`): a key generated on the device, a
-certificate signed by AWS IoT, the Thing `<fleet>-<serial>` registered in
-thing group `<fleet>` with a policy scoped to it. The serial is eth0's MAC
-address unless `/etc/default/greengrass` sets `GGL_SERIAL`. One image
-serves all boards, but anyone holding the claim can register a device in
-the fleet (in production, add a pre-provisioning hook that validates the
-serial number), and without storage each boot provisions a new certificate,
-leaving the previous one registered (`development_tools/aws-clean-certs.sh` removes
-them).
+Greengrass Lite can also provision a device itself at boot, from a claim
+certificate in the image, with [AWS IoT fleet
+provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html).
+On this chip, upstream's `fleet-provisioning` sends its certificate request
+before its TLS connection to AWS IoT is up, and fails. A fix, and the
+image support for a claim, are under review separately (branch
+`esp32s31-greengrass-lite-16mib`).
 
 ## What persists
 
 | | Persistent storage | No storage |
 | --- | --- | --- |
 | Identity, kit in the image | kept | kept (applied at every boot) |
-| Identity, fleet provisioning | kept | a new certificate at every boot |
 | Configuration, deployed components | kept | lost at every reboot |
 
 Without storage, a thing group's deployments are not sent again to a
@@ -87,19 +87,20 @@ root filesystem is mounted over NFSv3 from a workstation on the same
 network (the kernel does DHCP itself: `ip=dhcp root=/dev/nfs`). Rebuilds
 and redeployments need no reflashing.
 
-A product would not depend on an NFS server. This board, with the public
-sources, cannot hold Greengrass without one, though (measured; details in
-`development_tools/results.md`):
+A product would not depend on an NFS server, and it would not keep its
+root file system in this board's flash either:
 
 - Greengrass needs persistent writable storage for `/var/lib/greengrass`
   (credentials, configuration database, deployed components, the state a
   bootstrap reboot resumes from). The board's flash root partition is a
   read-only ROM mapping (`physmap`, `type=rom`): the public kernel has no
-  SPI-NOR write driver and no flash file system. No SD card is fitted.
-- The root file system compresses to 8.7 MiB; the flash layout reserves
-  4 MiB for it.
+  SPI-NOR write driver and no flash file system, and the kernel executes
+  in place from the same flash.
+- The root file system, with glibc and systemd, is about 50 MB; the flash
+  layout reserves 4 MiB for it.
 
-A product port therefore needs local writable storage (an SD card or eMMC
-on the SDMMC host, whose block driver the kernel already has, or a
-writable flash partition with an SPI-NOR driver) and a flash layout with
-room for the root.
+A product port therefore needs an SD card or eMMC. Espressif's BSP now
+supports an ext4 root file system on an SD card
+(`espressif_esp32s31_function_core_board_nor_sd_rootfs_defconfig`), which
+would also hold `/var/lib`; the Function-CoreBoard has no card slot, so
+this repository keeps the NFS root.

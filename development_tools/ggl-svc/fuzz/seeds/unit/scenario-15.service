@@ -1,5 +1,0 @@
-[Service]
-Type=notify
-NotifyAccess=all
-TimeoutStartSec=2
-ExecStart=/bin/sleep 1005

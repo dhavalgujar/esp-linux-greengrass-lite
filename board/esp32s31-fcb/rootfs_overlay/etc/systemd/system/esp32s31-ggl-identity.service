@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Greengrass Lite device state and identity
+# The state may be on remote storage (here: NFS).
+RequiresMountsFor=/var/lib
+After=systemd-tmpfiles-setup.service
+Before=greengrass-lite.target \
+	ggl.core.ggconfigd.service ggl.core.ggdeploymentd.service \
+	ggl.core.gg-fleet-statusd.service ggl.core.gghealthd.service \
+	ggl.core.ggipcd.service ggl.core.ggpubsubd.service \
+	ggl.core.iotcored.service ggl.core.tesd.service \
+	ggl.aws.greengrass.TokenExchangeService.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/esp32s31-ggl/identity start
+
+[Install]
+WantedBy=multi-user.target

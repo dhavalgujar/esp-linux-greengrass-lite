@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dhaval Gujar <dhaval.gujar@espressif.com>
+Subject: [PATCH] riscv: dts: esp32s31: describe 32 MiB of PSRAM
+
+The Function-CoreBoard comes with 16 or 32 MiB of PSRAM. U-Boot's SPL
+detects the size and maps all of it; Linux takes the size from the device
+tree, which describes 16 MiB. This configuration is for the 32 MiB board.
+
+Signed-off-by: Dhaval Gujar <dhaval.gujar@espressif.com>
+Upstream: not applicable (board variant)
+---
+--- a/arch/riscv/boot/dts/espressif/esp32s31.dts
++++ b/arch/riscv/boot/dts/espressif/esp32s31.dts
+@@ -80,7 +80,7 @@
+ 
+ 	memory@50000000 {
+ 		device_type = "memory";
+-		reg = <0x50000000 0x01000000>;
++		reg = <0x50000000 0x02000000>;
+ 	};
+ 
+ 	reserved-memory {

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Thu, 29 Oct 2026 04:25:42 +0530
-Subject: [PATCH] Recognize the riscv32 architecture
+Subject: [PATCH 1/2] Recognize the riscv32 architecture
 
 Map 32-bit RISC-V to "riscv32" for fleet-status reporting and recipe
 platform selection. Upstream only knows riscv64, and fleet status stops

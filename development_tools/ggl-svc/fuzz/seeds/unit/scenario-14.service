@@ -1,4 +1,0 @@
-[Service]
-Type=notify
-NotifyAccess=all
-ExecStart=/bin/sh -c 'sleep 1'

@@ -1,5 +1,0 @@
-!enable ggl.c.service
-!disable ggl.b.service
-!daemon-reload
-!reset-failed
-!notify ggl.b.service STOPPING

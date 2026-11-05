@@ -4,7 +4,7 @@
 # Install the built root filesystem into the NFS export, with the device's
 # identity and a development SSH key:
 #
-#   scripts/nfs-deploy.sh [--kit <connection-kit>] [--claim <fleet>]
+#   scripts/nfs-deploy.sh [--kit <connection-kit>]
 #       [--kit-on-storage <connection-kit>] [--clean] [--fresh]
 #
 #   --kit <connection-kit>   the device's identity in the image: a connection
@@ -13,8 +13,6 @@
 #                            scripts/aws-provision.sh --device; or a directory
 #                            with its files), installed in
 #                            /etc/greengrass/connection-kit
-#   --claim <fleet>          fleet provisioning: the fleet's claim and
-#                            config.yaml (scripts/aws-provision.sh <fleet>)
 #   --kit-on-storage <kit>   a generic image, and the connection kit put on the
 #                            board's storage (/var/lib/greengrass/connection-kit)
 #                            for the device to apply at its next boot
@@ -38,7 +36,7 @@
 #
 # The device's state (credentials, configuration database, deployed
 # components) is not part of the root: it lives in /var/lib (see
-# S95greengrass). Here the board's persistent storage is a second directory
+# /usr/libexec/esp32s31-ggl/identity). Here the board's persistent storage is a second directory
 # in the export, <root>-data, mounted on /var/lib through /etc/fstab.
 #   --fresh  no /var/lib mount: the device keeps its state in RAM, as a board
 #            without storage
@@ -49,26 +47,20 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${S31_WORK:-$(dirname -- "$repo")}
-usage="usage: $0 [--kit <kit>] [--claim <fleet>] [--kit-on-storage <kit>] [--clean] [--fresh]"
+usage="usage: $0 [--kit <kit>] [--kit-on-storage <kit>] [--clean] [--fresh]"
 kit=
-fleet=
 storage_kit=
 clean=
 fresh=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--kit) kit=${2:?$usage}; shift 2 ;;
-	--claim) fleet=${2:?$usage}; shift 2 ;;
 	--kit-on-storage) storage_kit=${2:?$usage}; shift 2 ;;
 	--clean) clean=1; shift ;;
 	--fresh) fresh=1; shift ;;
 	*) echo "$usage" >&2; exit 2 ;;
 	esac
 done
-if [ -n "$kit" ] && [ -n "$fleet" ]; then
-	echo "--kit and --claim are alternatives" >&2
-	exit 2
-fi
 container=${S31_NFS_CONTAINER:-s31-ggl-nfs}
 nfs_dir=${S31_NFS_DIR:-$work/nfs}
 export_dir=${S31_NFS_EXPORT:-/srv/nfs/ggl}
@@ -81,11 +73,6 @@ data=$target-data
 fragment=$work/out/$name/nfsroot-cmdline.fragment
 
 test -f "$rootfs"
-if [ -n "$fleet" ]; then
-	secrets=$work/secrets/$fleet
-	test -f "$secrets/config.yaml"
-	test -f "$secrets/claim/claim.pem.crt"
-fi
 docker inspect -f '{{.State.Running}}' "$container" | grep -qx true
 # The NFS server the kernel mounts its root from (scripts/build.sh).
 server=$(sed -n 's/.*nfsroot=\([^:]*\):.*/\1/p' "$fragment")
@@ -161,30 +148,9 @@ chmod 0700 "$files/root/.ssh"
 tar -C "$files" -cf - --owner=0 --group=0 root/.ssh |
 	docker exec -i "$container" tar -C "$new" -xpf -
 
-if [ -n "$fleet" ]; then
-	(
-		umask 077
-		mkdir -p "$files/claim/etc/greengrass/claim"
-		cp "$secrets/config.yaml" "$files/claim/etc/greengrass/config.yaml"
-		cp "$secrets/claim/claim.pem.crt" "$secrets/claim/claim.pem.key" \
-			"$secrets/claim/AmazonRootCA1.pem" \
-			"$files/claim/etc/greengrass/claim/"
-	)
-	chmod 0644 "$files/claim/etc/greengrass/config.yaml" \
-		"$files/claim/etc/greengrass/claim/claim.pem.crt" \
-		"$files/claim/etc/greengrass/claim/AmazonRootCA1.pem"
-	# Only fleet-provisioning, which runs as root, reads the claim.
-	chmod 0700 "$files/claim/etc/greengrass/claim"
-	# Name only the files and the leaf directory: tar then leaves /etc and
-	# /etc/greengrass (modes, owners, the config.d link) untouched.
-	tar -C "$files/claim" -cf - --owner=0 --group=0 \
-		etc/greengrass/config.yaml etc/greengrass/claim |
-		docker exec -i "$container" tar -C "$new" -xpf -
-fi
-
 if [ -n "$kit" ]; then
 	unpack_kit "$kit" "$files/kit/etc/greengrass/connection-kit"
-	# S95greengrass applies the kit as ggcore.
+	# The identity service applies the kit as ggcore.
 	chmod 0750 "$files/kit/etc/greengrass/connection-kit"
 	tar -C "$files/kit" -cf - --owner=0 --group="$ggcore_gid" --numeric-owner \
 		etc/greengrass/connection-kit |
@@ -209,7 +175,6 @@ docker exec "$container" sh -c '
 
 identity="no identity"
 [ -n "$kit" ] && identity="connection kit $kit"
-[ -n "$fleet" ] && identity="fleet $fleet (claim)"
 [ -n "$storage_kit" ] && identity="$identity; on storage: $storage_kit"
 if [ -n "$fresh" ]; then
 	echo "Deployed the root filesystem to $root ($identity; state in RAM)"

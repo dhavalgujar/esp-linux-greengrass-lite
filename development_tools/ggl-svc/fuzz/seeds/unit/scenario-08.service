@@ -1,5 +1,0 @@
-[Service]
-Type=exec
-ExecStart=/bin/sh -c 'if [ -e /tmp/t-manual.ran ]; then exec sleep 1003; fi; touch /tmp/t-manual.ran; exit 1'
-Restart=on-failure
-RestartSec=1

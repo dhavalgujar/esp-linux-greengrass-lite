@@ -1,4 +1,0 @@
-!link /dev/shm/ggl-svc-fuzz/units/ggl.c.service
-!watch
-show ggl.core.a.service
-!reset-failed ggl.b.service

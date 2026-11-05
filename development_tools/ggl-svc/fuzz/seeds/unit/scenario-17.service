@@ -1,3 +1,0 @@
-[Service]
-Type=exec
-ExecStart=/bin/sh -c '/bin/sleep 1007 & exec /bin/sleep 1008'

@@ -1,11 +1,10 @@
 #!/bin/sh
 # SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
-# Set up a fleet of Greengrass Lite core devices in AWS IoT, and either a
-# connection kit for one device of it, or fleet provisioning for all:
+# Set up a fleet of Greengrass Lite core devices in AWS IoT, and register
+# one device of it, with its connection kit:
 #
 #   scripts/aws-provision.sh <fleet-name> --device <name>
-#   scripts/aws-provision.sh <fleet-name>
 #
 #   AWS_REGION       default: the CLI's configured region
 #   GG_ROLE_ALIAS    existing IoT role alias for the Token Exchange Service
@@ -19,33 +18,24 @@
 # The token-exchange role and alias and the account's Greengrass service role
 # must already exist; this script only checks them.
 #
-# --device <name>: registers Thing <fleet>-<name> through the template, with
+# Then registers Thing <fleet>-<name> through the template, with
 # a new key and certificate, and writes a connection kit for it, in the
 # format the AWS IoT console downloads for a nucleus lite core device, to
 # $S31_WORK/secrets/<fleet>/devices/<fleet>-<name>-connectionKit.zip (mode
 # 0700 directory). Install it with scripts/nfs-deploy.sh --kit. The private
 # key is created here, on the workstation.
-#
-# Without --device: fleet provisioning. Creates IoT policy <fleet>-claim and
-# a claim certificate that may only use it, and writes them with the fleet's
-# config.yaml to $S31_WORK/secrets/<fleet>/{config.yaml,claim/}; devices
-# provision themselves from these at boot (scripts/nfs-deploy.sh --claim).
-# The template does not validate devices: anyone holding the claim can
-# register a device in the fleet. In production, add a pre-provisioning hook
-# that checks the serial number against your records.
+
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${S31_WORK:-$(dirname -- "$repo")}
-fleet=${1:?usage: $0 <fleet-name> [--device <name>]}
-device=
-if [ "${2:-}" = --device ]; then
-	device=${3:?usage: $0 <fleet-name> [--device <name>]}
-fi
+usage="usage: $0 <fleet-name> --device <name>"
+fleet=${1:?$usage}
+[ "${2:-}" = --device ] || { echo "$usage" >&2; exit 2; }
+device=${3:?$usage}
 region=${AWS_REGION:-$(aws configure get region)}
 role_alias=${GG_ROLE_ALIAS:-ESP32S31GreengrassTokenExchangeAlias}
 role=$fleet-provisioning
-claim_policy=$fleet-claim
 secrets=$work/secrets/$fleet
 
 account=$(aws sts get-caller-identity --query Account --output text)
@@ -108,25 +98,24 @@ cred_endpoint=$(aws iot describe-endpoint --region "$region" \
 	--endpoint-type iot:CredentialProvider --query endpointAddress \
 	--output text)
 
-if [ -n "$device" ]; then
-	thing=$fleet-$device
-	dir=$secrets/devices/$thing
-	kit=$secrets/devices/$thing-connectionKit.zip
-	if [ -e "$kit" ]; then
-		echo "$kit already exists; refusing to overwrite" >&2
-		exit 1
-	fi
-	mkdir -p "$dir"
-	cert_id=$(aws iot create-keys-and-certificate --region "$region" \
-		--set-as-active \
-		--certificate-pem-outfile "$dir/device.pem.crt" \
-		--private-key-outfile "$dir/private.pem.key" \
-		--query certificateId --output text)
-	# The same template as fleet provisioning: the same Thing name, policy
-	# and thing group as a device that provisioned itself. RegisterThing does
-	# not evaluate Fn::Join, so the serial number is put in here.
-	python3 - "$secrets/provisioning-template.json" "$device" \
-		>"$dir/template.json" <<'PY'
+thing=$fleet-$device
+dir=$secrets/devices/$thing
+kit=$secrets/devices/$thing-connectionKit.zip
+if [ -e "$kit" ]; then
+	echo "$kit already exists; refusing to overwrite" >&2
+	exit 1
+fi
+mkdir -p "$dir"
+cert_id=$(aws iot create-keys-and-certificate --region "$region" \
+	--set-as-active \
+	--certificate-pem-outfile "$dir/device.pem.crt" \
+	--private-key-outfile "$dir/private.pem.key" \
+	--query certificateId --output text)
+# The same template as fleet provisioning: the same Thing name, policy
+# and thing group as a device that provisioned itself. RegisterThing does
+# not evaluate Fn::Join, so the serial number is put in here.
+python3 - "$secrets/provisioning-template.json" "$device" \
+	>"$dir/template.json" <<'PY'
 import json, sys
 template, serial = json.load(open(sys.argv[1])), sys.argv[2]
 def render(x):
@@ -144,15 +133,15 @@ template["Resources"] = render(template["Resources"])
 del template["Parameters"]["SerialNumber"]
 json.dump(template, sys.stdout)
 PY
-	aws iot register-thing --region "$region" \
-		--template-body "file://$dir/template.json" \
-		--parameters "{\"AWS::IoT::Certificate::Id\":\"$cert_id\"}" \
-		>/dev/null
-	curl -fsS -o "$dir/AmazonRootCA1.pem" \
-		https://www.amazontrust.com/repository/AmazonRootCA1.pem
-	# As the console writes it: the device fills in {{config_dir}} and
-	# {{nucleus_component}}.
-	cat >"$dir/config.yaml" <<EOF
+aws iot register-thing --region "$region" \
+	--template-body "file://$dir/template.json" \
+	--parameters "{\"AWS::IoT::Certificate::Id\":\"$cert_id\"}" \
+	>/dev/null
+curl -fsS -o "$dir/AmazonRootCA1.pem" \
+	https://www.amazontrust.com/repository/AmazonRootCA1.pem
+# As the console writes it: the device fills in {{config_dir}} and
+# {{nucleus_component}}.
+cat >"$dir/config.yaml" <<EOF
 ---
 system:
   privateKeyPath: "{{config_dir}}/private.pem.key"
@@ -168,40 +157,7 @@ services:
       iotDataEndpoint: "$data_endpoint"
       iotRoleAlias: "$role_alias"
 EOF
-	zip -qj "$kit" "$dir/config.yaml" "$dir/device.pem.crt" \
-		"$dir/private.pem.key" "$dir/AmazonRootCA1.pem"
-	echo "Device $thing registered (certificate $cert_id) in thing group $fleet"
-	echo "Connection kit: $kit"
-	exit 0
-fi
-
-mkdir -p "$secrets/claim"
-subst "$repo/aws/claim-policy.json.in" >"$secrets/claim-policy.json"
-if aws iot get-policy --region "$region" \
-	--policy-name "$claim_policy" >/dev/null 2>&1; then
-	echo "IoT policy $claim_policy: exists"
-else
-	aws iot create-policy --region "$region" --policy-name "$claim_policy" \
-		--policy-document "file://$secrets/claim-policy.json" >/dev/null
-	echo "IoT policy $claim_policy: created"
-fi
-
-if [ -s "$secrets/claim/claim.pem.crt" ]; then
-	echo "claim certificate: exists ($secrets/claim)"
-else
-	cert_arn=$(aws iot create-keys-and-certificate --region "$region" \
-		--set-as-active \
-		--certificate-pem-outfile "$secrets/claim/claim.pem.crt" \
-		--private-key-outfile "$secrets/claim/claim.pem.key" \
-		--query certificateArn --output text)
-	echo "$cert_arn" >"$secrets/claim/certificate-arn"
-	aws iot attach-policy --region "$region" --policy-name "$claim_policy" \
-		--target "$cert_arn"
-	echo "claim certificate: created ($cert_arn)"
-fi
-curl -fsS -o "$secrets/claim/AmazonRootCA1.pem" \
-	https://www.amazontrust.com/repository/AmazonRootCA1.pem
-subst "$repo/aws/config.yaml.in" >"$secrets/config.yaml"
-
-echo "Fleet $fleet ready: devices register as $fleet-<serial> in thing group $fleet"
-echo "Claim and config.yaml: $secrets"
+zip -qj "$kit" "$dir/config.yaml" "$dir/device.pem.crt" \
+	"$dir/private.pem.key" "$dir/AmazonRootCA1.pem"
+echo "Device $thing registered (certificate $cert_id) in thing group $fleet"
+echo "Connection kit: $kit"

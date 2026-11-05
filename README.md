@@ -1,22 +1,21 @@
 # AWS IoT Greengrass Lite on ESP32-S31 Linux
 
 [AWS IoT Greengrass nucleus lite](https://github.com/aws-greengrass/aws-greengrass-lite)
-on the ESP32-S31 Function-CoreBoard, connected over Ethernet, built from
-public sources only. The complete nucleus runs in 16 MiB of RAM: cloud
-and local deployments, component lifecycle and health, fleet status, IPC,
-MQTT to AWS IoT Core and the Token Exchange Service. About 1 MiB is left
-for components: `MemAvailable` reads ~5 MiB, but most of that is program
-code the board needs again (measured: `development_tools/results.md`,
-"Memory margin"). Executing that code in place from flash would triple
-the margin; that is measured as an experiment, not part of this
-configuration (`development_tools/xip`).
+on the ESP32-S31 Function-CoreBoard with 32 MiB of PSRAM, connected over
+Ethernet, built from public sources only. Greengrass Lite runs as upstream
+runs it: under systemd, with its own service units, and two small fixes.
+Cloud and local deployments, component lifecycle and health, fleet
+status, IPC, MQTT to AWS IoT Core and the Token Exchange Service all work.
 
 This repository is a Buildroot `BR2_EXTERNAL` tree on
 [espressif/esp-buildroot-external](https://github.com/espressif/esp-buildroot-external):
-Espressif's toolchain, boot stack, kernel and flash packaging, plus
-Greengrass Lite and an example component. Every source is pinned
-(`sources.lock`, the defconfig) and hash-checked, and a fresh clone builds
-byte-identical images.
+Espressif's boot stack, kernel and flash packaging, plus Greengrass Lite and
+an example component. Every source is pinned (`sources.lock`, the
+defconfig) and hash-checked.
+
+For the 16 MiB board, where systemd does not fit, an experimental
+configuration with a purpose-built service manager is under review
+separately (branch `esp32s31-greengrass-lite-16mib`).
 
 ## Quick start
 
@@ -54,59 +53,78 @@ The board appears as a Greengrass core device (`linux`/`riscv32`) in the
 AWS IoT Greengrass console. The example reads its configuration over IPC,
 round-trips a message through local pub/sub and AWS IoT Core, then
 publishes a heartbeat every 30 s on `esp32s31/<thing>/heartbeat`. On the
-board (`ssh -i ../secrets/ssh/id_ed25519 root@<board-ip>`):
+board (`ssh -i ../secrets/ssh/id_ed25519 root@<board-ip>`; it takes about
+two minutes to boot over NFS):
 
 ```sh
-/etc/init.d/S95greengrass status       # every unit: state, result, restarts
-grep core.iotcored /var/log/messages   # logs, by unit
+systemctl list-units 'ggl.*'           # the Greengrass units
+journalctl -u ggl.core.iotcored        # logs, by unit
 ```
 
 ## Device identity and state
 
 Each board gets its own connection kit, in the image or dropped on its
-storage; AWS IoT fleet provisioning is the alternative (`aws-provision.sh
-<fleet>`, `nfs-deploy.sh --claim`). Everything a device remembers lives in
-`/var/lib`: a board makes it persistent by mounting its storage there,
-and without storage the device starts fresh at every boot. Here `/var/lib`
-is a second directory on the NFS server. Details: `docs/identity.md`.
+storage, and `esp32s31-ggl-identity.service` applies it before Greengrass
+starts. Everything a device remembers lives in `/var/lib`: a board makes it
+persistent by mounting its storage there, and without storage the device
+starts fresh at every boot. Here `/var/lib` is a second directory on the
+NFS server. Details: `docs/identity.md`.
 
 ## What is changed in the public sources, and why
 
-Everything else is built as published. Each change is a patch file here,
-applied by Buildroot:
+Everything else is built as published. Each change is a file here, applied
+by Buildroot:
 
 | Change | Where | Why |
 | --- | --- | --- |
-| Recognize `riscv32` | Greengrass Lite, patch 0001 | Upstream only knows riscv64: platform matching and fleet status fail on RV32. |
-| Build without systemd (`GGL_PORTABLE_CORE`) | patch 0002 | systemd does not fit in 16 MiB (measured: no login after 12 minutes). |
-| `ggl-svc`, a service manager for the units Greengrass generates | patches 0003, 0006, 0007 | Upstream runs components as systemd units, reads their health over D-Bus and identifies IPC callers by their systemd cgroup. Why not an existing supervisor: `docs/architecture.md`. |
-| Keep the IoT Jobs ID length on bootstrap resume | patch 0004 | Upstream bug, also on main: a cloud deployment with a bootstrap step never completes. |
-| Retry the fleet provisioning certificate request | patch 0005 | Upstream sends it after a fixed 5 s; the TLS connection takes ~11 s on this chip. |
-| Retry HTTP requests when the host name does not resolve | patch 0008 | Upstream gives up at once: one name server answer slower than musl's 5 s fails the deployment that needed it. |
+| Recognize `riscv32` | Greengrass Lite, patch 0001 | Upstream only knows riscv64: the nucleus does not build for RV32, and platform matching and fleet status would fail. |
+| Keep the IoT Jobs ID length on bootstrap resume | Greengrass Lite, patch 0002 | Upstream bug, also on main: a cloud deployment with a bootstrap step never completes. |
 | Reset the whole chip on reboot | OpenSBI patch | The public firmware resets CPU core 0 only: `reboot` hangs the board. |
-| `CONFIG_CGROUPS=y` (no controllers) | kernel fragment | `ggl-svc` runs each unit in its own cgroup, as systemd does. |
+| Describe 32 MiB of PSRAM | kernel device tree patch | The public device tree describes 16 MiB; U-Boot's SPL already detects and maps all of it. |
+| One CPU core | kernel fragment | The public kernel now runs Linux on both cores; measured, that costs memory and flash and gains nothing here (`development_tools/results.md`). |
+| What systemd needs | kernel fragment | Namespaces, cgroups and tmpfs extended attributes, which the minimal kernel configuration leaves out. |
+| glibc | Buildroot toolchain | Buildroot builds systemd only with glibc; Espressif's public toolchain is musl. |
 
-Patches 0001, 0002, 0004, 0005 and 0008 are candidates for upstream
-Greengrass Lite.
+Both Greengrass Lite patches are candidates for upstream.
+
+## Known issues
+
+- **Deployments fail intermittently.** The board does not keep up with
+  systemd and Greengrass under deployment load: Greengrass's own 10 s
+  core-bus and 25 s D-Bus timeouts fire, and the deployment is reported
+  FAILED. In the full end-to-end test, 5 of 14 checks passed
+  (`development_tools/results.md`); revising a failed deployment retries
+  it. MemAvailable is about 13 MiB after boot, but a deployment uses most
+  of it, and code is read again over the network throughout: keep
+  components small (`development_tools/memory-margin.sh` measures what is
+  left). The systemd-free configuration on the 16 MiB branch passed the
+  same test on this board.
+- **Fleet provisioning** fails on this chip: upstream sends the
+  certificate request a fixed 5 s after starting, and the TLS connection
+  takes longer. Use connection kits; a fix is under review separately.
+- **A slow name server** (an answer after more than 5 s) fails the HTTP
+  request, and the deployment that needed it; upstream does not retry.
+  Revising the deployment retries it; a fix is under review separately.
 
 ## Repository layout
 
 ```text
 ├── examples/           the example component (esp-linux-examples layout)
 ├── scripts/            build, flash, AWS setup, NFS root, deploy the example
-├── configs/, board/,   the Buildroot tree: defconfig, kernel fragments,
-│   package/            OpenSBI patch, root file system overlay, packages
-├── aws/, nfs-server/   templates and the NFS server container the scripts use
+├── configs/, board/,   the Buildroot tree: defconfig, kernel fragments and
+│   package/            patches, root file system overlay, packages
+├── aws/, nfs-server/   the template and the NFS server container the
+│                       scripts use
 ├── docs/               identity, architecture, troubleshooting
-└── development_tools/  for maintainers: end-to-end board test, ggl-svc
-                        conformance and fuzzing, measurements and results
+└── development_tools/  for maintainers: end-to-end board test, memory
+                        test, measurements and results
 ```
 
 ## More
 
-- `docs/identity.md`: connection kits, fleet provisioning, what persists,
-  and why the root file system is on NFS here.
-- `docs/architecture.md`: Greengrass Lite without systemd, and `ggl-svc`.
+- `docs/identity.md`: connection kits, what persists, and why the root
+  file system is on NFS here.
+- `docs/architecture.md`: how Greengrass Lite runs on the board.
 - `docs/troubleshooting.md` and `examples/cloud/greengrass-hello/README.rst`:
   the board, Greengrass and the network, layer by layer.
 - `development_tools/`: how this was tested, and the results.
@@ -116,4 +134,5 @@ Greengrass Lite.
 Repository infrastructure and documentation: Apache License 2.0
 (`LICENSE`). The example under `examples/`: CC0-1.0, as in
 esp-linux-examples. The patches to Greengrass Lite are under its
-Apache-2.0 license. Each file states its SPDX identifier.
+Apache-2.0 license, the kernel device tree patch under the kernel's
+GPL-2.0. Each file states its SPDX identifier.

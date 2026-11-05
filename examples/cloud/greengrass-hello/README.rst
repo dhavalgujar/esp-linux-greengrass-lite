@@ -106,16 +106,16 @@ with "doesn't claim platform ... compatibility".
 Example Output
 --------------
 
-The component's output is in syslog, tagged with its name:
+The component's output is in the journal, under its unit:
 
 .. code-block:: console
 
-   # grep com.espressif.esp32s31.Hello /var/log/messages
+   # journalctl -u ggl.com.espressif.esp32s31.Hello
    ... com.espressif.esp32s31.Hello: hello: config message=Hello from ESP32-S31
    ... com.espressif.esp32s31.Hello: hello: local esp32s31/hello <- Hello from ESP32-S31
-   ... com.espressif.esp32s31.Hello: hello: cloud esp32s31/esp32s31-greengrass-32eda0ed7875/hello <- Hello from ESP32-S31
+   ... com.espressif.esp32s31.Hello: hello: cloud esp32s31/esp32s31-greengrass-fcb-eth/hello <- Hello from ESP32-S31
    ... com.espressif.esp32s31.Hello: hello: PASS
-   ... com.espressif.esp32s31.Hello: hello: heartbeat {"thing":"esp32s31-greengrass-32eda0ed7875","uptime_s":157,"mem_available_kb":4928} (0)
+   ... com.espressif.esp32s31.Hello: hello: heartbeat {"thing":"esp32s31-greengrass-fcb-eth","uptime_s":263,"mem_available_kb":12840} (0)
 
 The heartbeat can be watched in the AWS IoT MQTT test client by
 subscribing to ``esp32s31/+/heartbeat``.
@@ -125,8 +125,8 @@ Kernel Configuration Fragment
 
 The component needs no kernel option beyond networking, so
 ``kconfig.fragment`` contains no ``CONFIG_`` entries. Greengrass nucleus
-lite, as built by this repository, needs ``CONFIG_CGROUPS``
-(``board/esp32s31-fcb/linux-ggl-svc.fragment``).
+lite runs under systemd, whose kernel options are in
+``board/esp32s31-fcb/linux-systemd.fragment``.
 
 Troubleshooting
 ---------------
@@ -134,7 +134,7 @@ Troubleshooting
 Userspace (the component)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* **Its output:** ``grep com.espressif.esp32s31.Hello /var/log/messages``.
+* **Its output:** ``journalctl -u ggl.com.espressif.esp32s31.Hello``.
   Each step prints one line; the first failing step prints
   ``hello: ... failed: <error>`` and the component exits.
 * ``hello: AWS_IOT_THING_NAME is not set``: the program was started by
@@ -144,28 +144,26 @@ Userspace (the component)
   ``ggipcd`` is down. Check the unit, below.
 * ``hello: IoT Core round trip failed``: ``iotcored`` is not connected yet.
   Components can start before the MQTT connection is up. Check for
-  ``Connected to IoT core`` in ``grep core.iotcored /var/log/messages``. A
+  ``MQTT connection established`` in ``journalctl -u ggl.core.iotcored``. A
   ``MQTTStatusNotConnected`` there means the device has no route to AWS IoT
-  Core, or its clock is wrong (TLS fails before ``ntpd`` has set it).
+  Core, or its clock is wrong (TLS fails before ``systemd-timesyncd`` has
+  set it).
 * The recipe is ignored, or the deployment fails with no lifecycle step:
   lifecycle keys are case sensitive in nucleus lite (``run:``/``Script:``),
   and the recipe file must be named ``<component>-<version>.yaml``.
 
-Framework (Greengrass and its service manager)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Framework (Greengrass and systemd)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* **Unit state:** ``systemctl show ggl.com.espressif.esp32s31.Hello.service``
-  prints ``<unit> <ActiveState> <Result> <NRestarts> ...``. Healthy:
-  ``active success 0``. ``failed start-limit-hit 3`` means the component
-  kept exiting; Greengrass then reports it BROKEN.
-* **All units:** ``/etc/init.d/S95greengrass status``. Every core unit
-  should be ``active success 0``.
-* **The component's processes:**
-  ``cat /sys/fs/cgroup/ggl-svc/ggl.com.espressif.esp32s31.Hello.service/cgroup.procs``,
-  and for one process ``cat /proc/<pid>/cgroup``, which must read
-  ``0::/ggl-svc/ggl.com.espressif.esp32s31.Hello.service``. This is how
-  IPC identifies the caller as the component.
-* **Deployments:** ``grep core.ggdeploymentd /var/log/messages``. Each
+* **Unit state:** ``systemctl status ggl.com.espressif.esp32s31.Hello``.
+  A unit that kept exiting ends ``failed``; Greengrass then reports the
+  component BROKEN.
+* **All units:** ``systemctl list-units 'ggl.*'``. Every core unit should be
+  ``active running``.
+* **The component's processes:** ``systemctl status`` lists them; for one
+  process, ``cat /proc/<pid>/cgroup`` names the component's unit. This is
+  how IPC identifies the caller as the component.
+* **Deployments:** ``journalctl -u ggl.core.ggdeploymentd``. Each
   deployment ends with ``reporting job as SUCCEEDED`` or ``FAILED``,
   preceded by the reason.
 * **Cloud view:** ``aws greengrassv2 list-installed-components

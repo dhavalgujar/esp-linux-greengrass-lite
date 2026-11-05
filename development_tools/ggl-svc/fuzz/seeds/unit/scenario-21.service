@@ -1,6 +1,0 @@
-[Unit]
-BindsTo=t-bound-a.service
-After=t-bound-a.service
-[Service]
-Type=exec
-ExecStart=/bin/sleep 1011

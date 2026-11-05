@@ -63,11 +63,8 @@ ifeq ($(BR2_TOOLCHAIN_USES_GLIBC),)
 AWS_GREENGRASS_LITE_DEPENDENCIES += argp-standalone
 endif
 
-ifeq ($(BR2_PACKAGE_SYSTEMD),y)
 AWS_GREENGRASS_LITE_DEPENDENCIES += systemd
-AWS_GREENGRASS_LITE_CONF_OPTS += \
-	-DGGL_PORTABLE_CORE=OFF \
-	-DGGL_SYSTEMD_SYSTEM_DIR=lib/systemd/system
+AWS_GREENGRASS_LITE_CONF_OPTS += -DGGL_SYSTEMD_SYSTEM_DIR=lib/systemd/system
 
 # Start the nucleus at boot, as the upstream install guide does with
 # "systemctl enable greengrass-lite.target" and its member services.
@@ -82,9 +79,6 @@ define AWS_GREENGRASS_LITE_INSTALL_INIT_SYSTEMD
 			$(TARGET_DIR)/etc/systemd/system/greengrass-lite.target.wants/; \
 	done
 endef
-else
-AWS_GREENGRASS_LITE_CONF_OPTS += -DGGL_PORTABLE_CORE=ON
-endif
 
 # Native components link the Greengrass component SDK (gg-sdk) that the
 # nucleus build vendors; export it to staging. It is an LTO archive, so

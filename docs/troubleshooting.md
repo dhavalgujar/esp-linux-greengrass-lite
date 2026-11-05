@@ -21,6 +21,13 @@ The component, Greengrass and the network, layer by layer:
 - **SSH connects but never completes, `/proc` is missing:** the root was
   rewritten underneath the running board by something other than
   `scripts/nfs-deploy.sh`; reset it.
+- **No SSH, the console ends in "VFS: Unable to mount root fs via NFS":**
+  the board cannot reach the NFS server: check that the workstation is on
+  the board's network at the address the image was built for
+  (`S31_NFS_SERVER`).
+- **SSH takes two minutes or more after a reset:** that is systemd's boot
+  over NFS on this board; the first connection may also time out during
+  the banner exchange while the boot finishes.
 
 ## Access and recipes
 
@@ -34,7 +41,12 @@ The component, Greengrass and the network, layer by layer:
 - Without the account's Greengrass service role association, deployments
   are recorded but never reach the device.
 - **A cloud deployment FAILED with "Curl request failed":** the log names
-  curl's error (`grep "Curl request failed" /var/log/messages`). HTTP
-  requests are retried with backoff on timeouts, failed connections and
-  host names that did not resolve (patch 0008); other errors fail the
-  deployment, and revising the deployment retries it.
+  curl's error (`journalctl -b | grep "Curl request failed"`). Greengrass
+  retries timeouts and failed connections, not a host name that did not
+  resolve: a name server slower than 5 s fails the deployment. Revising
+  the deployment retries it.
+- **A deployment FAILED after "Read timed out":** a core daemon, usually
+  `ggconfigd`, missed the core bus's 10 s timeout. Revise the deployment.
+- **A deployed component does not start after a reboot:**
+  `systemctl status esp32s31-ggl-identity` must have finished: it reloads
+  systemd once `/var/lib` is mounted (`docs/identity.md`).

@@ -1,4 +1,0 @@
-[Service]
-Type=exec
-ExecStart=/bin/sh -c 'trap "" TERM; while :; do sleep 1; done'
-TimeoutStopSec=2
