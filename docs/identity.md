@@ -64,8 +64,8 @@ certificate in the image, with [AWS IoT fleet
 provisioning](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html).
 On this chip, upstream's `fleet-provisioning` sends its certificate request
 before its TLS connection to AWS IoT is up, and fails. A fix, and the
-image support for a claim, are under review separately (branch
-`esp32s31-greengrass-lite-16mib`).
+image support for a claim, are part of the experimental 16 MiB
+configuration (`docs/16mib.md`).
 
 ## What persists
 

@@ -1,0 +1,4 @@
+[Service]
+Type=exec
+ExecStart=/bin/sh -c 'exit 101'
+SuccessExitStatus=100 101

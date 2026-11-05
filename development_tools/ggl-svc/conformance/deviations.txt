@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+#
+# Checkpoints ("<scenario> <checkpoint>") where ggl-svc deliberately does
+# not report what systemd does, one per line, each with its reason in a
+# comment above it. run.sh reports them without failing. None at present.

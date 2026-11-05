@@ -1,0 +1,4 @@
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/bin/sh -c 'sleep 1; echo dep >>/tmp/t-order'

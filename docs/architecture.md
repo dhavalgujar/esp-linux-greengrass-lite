@@ -54,8 +54,8 @@ what is left.
 
 On the 16 MiB board, the same systemd stack does not fit: it thrashes
 before it reaches a login. An experimental configuration for that board,
-with a purpose-built service manager in place of systemd, is under review
-separately (branch `esp32s31-greengrass-lite-16mib`).
+with a purpose-built service manager in place of systemd, is in
+`docs/16mib.md`.
 
 ## One CPU core
 

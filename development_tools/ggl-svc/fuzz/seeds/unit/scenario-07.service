@@ -1,0 +1,8 @@
+[Unit]
+StartLimitInterval=3600
+StartLimitBurst=3
+[Service]
+Type=exec
+ExecStart=/bin/true
+Restart=always
+RestartSec=1

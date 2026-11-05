@@ -1,0 +1,4 @@
+show ggl.b.service
+!stop ggl.core.a.service
+whois 1
+sd-notify READY

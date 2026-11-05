@@ -13,9 +13,9 @@ Espressif's boot stack, kernel and flash packaging, plus Greengrass Lite and
 an example component. Every source is pinned (`sources.lock`, the
 defconfig) and hash-checked.
 
-For the 16 MiB board, where systemd does not fit, an experimental
-configuration with a purpose-built service manager is under review
-separately (branch `esp32s31-greengrass-lite-16mib`).
+For the 16 MiB board, where systemd does not fit, there is an experimental
+configuration with a purpose-built service manager in place of systemd:
+`docs/16mib.md`.
 
 ## Quick start
 
@@ -103,10 +103,12 @@ Both Greengrass Lite patches are candidates for upstream.
   same test on this board.
 - **Fleet provisioning** fails on this chip: upstream sends the
   certificate request a fixed 5 s after starting, and the TLS connection
-  takes longer. Use connection kits; a fix is under review separately.
+  takes longer. Use connection kits; the 16 MiB configuration carries a
+  fix (`docs/16mib.md`).
 - **A slow name server** (an answer after more than 5 s) fails the HTTP
   request, and the deployment that needed it; upstream does not retry.
-  Revising the deployment retries it; a fix is under review separately.
+  Revising the deployment retries it; the 16 MiB configuration carries a
+  fix.
 
 ## Repository layout
 
@@ -127,6 +129,7 @@ Both Greengrass Lite patches are candidates for upstream.
 - `docs/identity.md`: connection kits, what persists, and why the root
   file system is on NFS here.
 - `docs/architecture.md`: how Greengrass Lite runs on the board.
+- `docs/16mib.md`: the experimental configuration for the 16 MiB board.
 - `docs/troubleshooting.md` and `examples/cloud/greengrass-hello/README.rst`:
   the board, Greengrass and the network, layer by layer.
 - `development_tools/`: how this was tested, and the results.

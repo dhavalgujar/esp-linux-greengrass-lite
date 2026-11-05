@@ -1,0 +1,4 @@
+[Service]
+Type=exec
+NotifyAccess=all
+ExecStart=/bin/sh -c 'sleep 1; systemd-notify --stopping; exec sleep 1006'

@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dhaval Gujar <dhaval.gujar@espressif.com>
+Date: Thu, 29 Oct 2026 04:29:41 +0530
+Subject: [PATCH 5/8] Build without systemd (GGL_PORTABLE_CORE)
+
+GGL_PORTABLE_CORE=ON builds the nucleus for a system without systemd,
+such as a musl/busybox embedded Linux image:
+
+- libsystemd is no longer required; sd_notify calls are compiled out;
+- recipe-runner runs phase scripts through /proc/self/fd, as musl's
+  fexecve fallback needs /dev/fd, which minimal images lack;
+- argp comes from argp-standalone when the C library has none.
+
+The service manager, the gghealthd backend and IPC caller identification
+these builds rely on are added by the next commit. With the option OFF
+the build is unchanged.
+
+Signed-off-by: Dhaval Gujar <dhaval.gujar@espressif.com>
+Upstream: not yet submitted (developed on the esp32s31/v2.7.0 branch of a fork)
+---
+ CMakeLists.txt                         | 25 ++++++++++++++++++++++++-
+ modules/ggdeploymentd/CMakeLists.txt   |  2 +-
+ modules/ggdeploymentd/src/bus_server.c |  4 ++++
+ modules/recipe-runner/src/runner.c     | 16 ++++++++++++++++
+ modules/tes-serverd/CMakeLists.txt     | 21 +++++++++++----------
+ modules/tes-serverd/src/http_server.c  |  4 ++++
+ 6 files changed, 60 insertions(+), 12 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6ab7bad..6e642c8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -14,6 +14,9 @@ option(BUILD_EXAMPLES "Build examples")
+ 
+ option(ENABLE_WERROR "Compile warnings as errors")
+ 
++option(GGL_PORTABLE_CORE
++       "Build for a system without systemd, managed by ggl-svcd" OFF)
++
+ set(GG_LOG_LEVEL CACHE STRING "GG log level")
+ # Backwards compat
+ if(GGL_LOG_LEVEL AND NOT GG_LOG_LEVEL)
+@@ -24,6 +27,12 @@ endif()
+ 
+ option(GGL_SYSTEMD_SERVICE_BUILD "Install GGL as a set of systemd services"
+        TRUE)
++if(GGL_PORTABLE_CORE)
++  set(GGL_SYSTEMD_SERVICE_BUILD
++      OFF
++      CACHE BOOL "Install GGL as a set of systemd services" FORCE)
++  add_compile_definitions(GGL_PORTABLE_CORE)
++endif()
+ set(GGL_SYSTEMD_SYSTEM_DIR
+     "lib/systemd/system"
+     CACHE STRING "Install directory for systemd unit files")
+@@ -270,11 +279,13 @@ pkg_search_module(openssl REQUIRED IMPORTED_TARGET openssl)
+ pkg_search_module(libcurl REQUIRED IMPORTED_TARGET libcurl>=7.68)
+ pkg_search_module(sqlite3 REQUIRED IMPORTED_TARGET sqlite3)
+ pkg_search_module(yaml REQUIRED IMPORTED_TARGET yaml-0.1)
+-pkg_search_module(libsystemd REQUIRED IMPORTED_TARGET libsystemd)
+ pkg_search_module(uuid REQUIRED IMPORTED_TARGET uuid)
+ pkg_search_module(libevent REQUIRED IMPORTED_TARGET libevent)
+ pkg_search_module(liburiparser REQUIRED IMPORTED_TARGET liburiparser)
+ pkg_search_module(libzip REQUIRED IMPORTED_TARGET libzip)
++if(NOT GGL_PORTABLE_CORE)
++  pkg_search_module(libsystemd REQUIRED IMPORTED_TARGET libsystemd)
++endif()
+ 
+ include(CheckCSourceCompiles)
+ 
+@@ -285,6 +296,18 @@ check_c_source_compiles(
+   "
+   has_argp)
+ 
++if(NOT has_argp)
++  find_path(argp_INCLUDE_DIR NAMES argp.h REQUIRED)
++  find_library(argp_LIBRARY NAMES argp REQUIRED)
++  add_library(argp STATIC IMPORTED GLOBAL)
++  set_target_properties(
++    argp PROPERTIES IMPORTED_LOCATION "${argp_LIBRARY}"
++                    INTERFACE_INCLUDE_DIRECTORIES "${argp_INCLUDE_DIR}")
++  # ggl-common itself includes argp.h, while the argp target is attached to
++  # each final executable by ggl_init_module below.
++  include_directories(SYSTEM "${argp_INCLUDE_DIR}")
++endif()
++
+ #
+ # Add components
+ #
+diff --git a/modules/ggdeploymentd/CMakeLists.txt b/modules/ggdeploymentd/CMakeLists.txt
+index 83dfd96..f0ddeb0 100644
+--- a/modules/ggdeploymentd/CMakeLists.txt
++++ b/modules/ggdeploymentd/CMakeLists.txt
+@@ -26,7 +26,7 @@ ggl_init_module(
+        core-bus-sub-response
+        recipe2unit
+        PkgConfig::uuid
+-       PkgConfig::libsystemd)
++       $<$<NOT:$<BOOL:${GGL_PORTABLE_CORE}>>:PkgConfig::libsystemd>)
+ target_compile_definitions(
+   ggdeploymentd
+   PRIVATE "GGL_SYSTEMD_SYSTEM_GROUP=\"${GGL_SYSTEMD_SYSTEM_GROUP}\"")
+diff --git a/modules/ggdeploymentd/src/bus_server.c b/modules/ggdeploymentd/src/bus_server.c
+index c83d448..f3f7143 100644
+--- a/modules/ggdeploymentd/src/bus_server.c
++++ b/modules/ggdeploymentd/src/bus_server.c
+@@ -12,7 +12,9 @@
+ #include <gg/types.h>
+ #include <gg/vector.h>
+ #include <ggl/core_bus/server.h>
++#ifndef GGL_PORTABLE_CORE
+ #include <systemd/sd-daemon.h>
++#endif
+ #include <stdbool.h>
+ #include <stddef.h>
+ #include <stdint.h>
+@@ -40,11 +42,13 @@ static GgError create_local_deployment(
+ void ggdeploymentd_start_server(void) {
+     GG_LOGI("Starting ggdeploymentd core bus server.");
+ 
++#ifndef GGL_PORTABLE_CORE
+     int notify_ret = sd_notify(0, "READY=1");
+     if (notify_ret < 0) {
+         GG_LOGE("Failed to send sd_notify (errno=%d).", -notify_ret);
+         return;
+     }
++#endif
+ 
+     GglRpcMethodDesc handlers[] = { { GG_STR("create_local_deployment"),
+                                       false,
+diff --git a/modules/recipe-runner/src/runner.c b/modules/recipe-runner/src/runner.c
+index 7a55d8c..56616f2 100644
+--- a/modules/recipe-runner/src/runner.c
++++ b/modules/recipe-runner/src/runner.c
+@@ -35,6 +35,7 @@
+ #include <unistd.h>
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ 
+ static GgError write_escaped_char(int out_fd, uint8_t c, bool single_quote) {
+@@ -847,8 +848,23 @@ GgError runner(const RecipeRunnerArgs *args) {
+         phase
+     );
+ 
++#ifdef GGL_PORTABLE_CORE
++    // Some constrained images have procfs but omit the /dev/fd symlinks that
++    // musl's fexecve fallback expects for an interpreted memfd script.
++    char script_path[64];
++    int path_len = snprintf(
++        script_path, sizeof(script_path), "/proc/self/fd/%d", script_fd
++    );
++    if ((path_len < 0) || ((size_t) path_len >= sizeof(script_path))) {
++        GG_LOGE("Failed to construct component script path.");
++        return GG_ERR_FATAL;
++    }
++    const char *argv[] = { "/bin/sh", script_path, NULL };
++    sys_ret = execve("/bin/sh", (char **) argv, environ);
++#else
+     const char *argv[] = { "/bin/sh", NULL };
+     sys_ret = fexecve(script_fd, (char **) argv, environ);
++#endif
+ 
+     GG_LOGE("Failed to execute component phase script: %d.", errno);
+     return GG_ERR_FATAL;
+diff --git a/modules/tes-serverd/CMakeLists.txt b/modules/tes-serverd/CMakeLists.txt
+index a7071e7..1aaf675 100644
+--- a/modules/tes-serverd/CMakeLists.txt
++++ b/modules/tes-serverd/CMakeLists.txt
+@@ -2,13 +2,14 @@
+ # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
+-ggl_init_module(
+-  tes-serverd
+-  NO_INLINE_TEST
+-  LIBS gg-sdk
+-       ggl-common
+-       ggl-http
+-       core-bus
+-       core-bus-gg-config
+-       PkgConfig::libevent
+-       PkgConfig::libsystemd)
++set(tes_serverd_libs
++    gg-sdk
++    ggl-common
++    ggl-http
++    core-bus
++    core-bus-gg-config
++    PkgConfig::libevent)
++if(NOT GGL_PORTABLE_CORE)
++  list(APPEND tes_serverd_libs PkgConfig::libsystemd)
++endif()
++ggl_init_module(tes-serverd NO_INLINE_TEST LIBS ${tes_serverd_libs})
+diff --git a/modules/tes-serverd/src/http_server.c b/modules/tes-serverd/src/http_server.c
+index df8075c..dd2ac1e 100644
+--- a/modules/tes-serverd/src/http_server.c
++++ b/modules/tes-serverd/src/http_server.c
+@@ -19,7 +19,9 @@
+ #include <netinet/in.h>
+ #include <string.h>
+ #include <sys/socket.h>
++#ifndef GGL_PORTABLE_CORE
+ #include <systemd/sd-daemon.h>
++#endif
+ #include <stdbool.h>
+ #include <stdio.h>
+ 
+@@ -312,11 +314,13 @@ GgError http_server(void) {
+         return ret;
+     }
+ 
++#ifndef GGL_PORTABLE_CORE
+     int ret_val = sd_notify(0, "READY=1");
+     if (ret_val < 0) {
+         GG_LOGE("Unable to update component state (errno=%d)", -ret_val);
+         return GG_ERR_FATAL;
+     }
++#endif
+ 
+     // Start the event loop
+     event_base_dispatch(base);

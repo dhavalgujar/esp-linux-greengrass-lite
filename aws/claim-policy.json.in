@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConnectWithAnyClientId",
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SignTheDeviceCsrAndRegisterTheThing",
+      "Effect": "Allow",
+      "Action": ["iot:Publish", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:@REGION@:@ACCOUNT@:topic/$aws/certificates/create-from-csr/*",
+        "arn:aws:iot:@REGION@:@ACCOUNT@:topic/$aws/provisioning-templates/@FLEET@/provision/*"
+      ]
+    },
+    {
+      "Sid": "ReceiveTheReplies",
+      "Effect": "Allow",
+      "Action": "iot:Subscribe",
+      "Resource": [
+        "arn:aws:iot:@REGION@:@ACCOUNT@:topicfilter/$aws/certificates/create-from-csr/*",
+        "arn:aws:iot:@REGION@:@ACCOUNT@:topicfilter/$aws/provisioning-templates/@FLEET@/provision/*"
+      ]
+    }
+  ]
+}

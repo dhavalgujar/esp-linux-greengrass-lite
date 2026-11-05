@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
+
+CONFIG_NTPD=y
+# CONFIG_FEATURE_NTPD_SERVER is not set
+# CONFIG_FEATURE_NTPD_CONF is not set
+# Greengrass log lines (forwarded by ggl-svcd) are longer than the default.
+CONFIG_FEATURE_SYSLOGD_READ_BUFFER_SIZE=512
+# Bound and stop fleet provisioning (S95greengrass).
+CONFIG_TIMEOUT=y
+CONFIG_PKILL=y
