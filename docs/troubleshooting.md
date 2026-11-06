@@ -33,9 +33,9 @@ The component, Greengrass and the network, layer by layer:
 
 - Dropbear (SSH) is in the image for development and for
   `development_tools/board-test.sh` only; Greengrass does not use it.
-  Opening the board's USB-UART resets it (its CP2102N drives EN): use SSH
-  for inspection, and `development_tools/s31-console.py` when a console is
-  needed.
+  Opening the board's USB-UART resets it (its CP2102N drives EN): keep one
+  console session open (`development_tools/board-console.py serve`, then
+  `board-console.py run`), or use SSH.
 - Recipes given to `ggl-cli deploy -r` are copied with their file mode, and
   components run as `gg_component`: keep them world-readable.
 - Without the account's Greengrass service role association, deployments

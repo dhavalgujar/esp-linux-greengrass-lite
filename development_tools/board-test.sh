@@ -4,7 +4,7 @@
 # End-to-end checks of a running board:
 #
 #   development_tools/board-test.sh <board-ip> <fleet-name> [--cloud] [--fresh]
-#       [--reset <serial-port> <chip-mac>]
+#       [--console <serial-port> <chip-mac> | --reset <serial-port> <chip-mac>]
 #
 # The board belongs to the fleet (scripts/aws-provision.sh), in thing group
 # <fleet>: as the Thing of its connection kit, or provisioned at boot as
@@ -19,6 +19,13 @@
 #             checking the chip MAC) and check what comes back (needs
 #             --cloud): with persistent storage the same device, with the
 #             cloud-deployed demo
+#   --console run the board commands in the board's serial console instead of
+#             over SSH (development_tools/board-console.py, after checking the
+#             chip MAC): a shell on the board costs less than an SSH server,
+#             and a busy board is slow rather than unreachable. Opening the
+#             port resets the board, so the test starts from a fresh boot;
+#             implies --reset, done through the console. The console stream
+#             is kept in $S31_WORK/out/console-<date>.log
 #   --fresh   the board keeps its state in RAM (nfs-deploy.sh --fresh): skip
 #             the bootstrap check (a deployment cannot outlive the reboot it
 #             needs), and expect nothing deployed after the reset: the same
@@ -26,14 +33,15 @@
 #             with fleet provisioning
 #
 #   S31_WORK      work area holding secrets/ssh (default: repo/..)
-#   ESP_ESPTOOL   esptool for --reset (default: from PATH)
+#   ESP_ESPTOOL   esptool for --reset and --console (default: from PATH)
+#   PYTHON        Python with pyserial, for --console (default: python3)
 #
 # Exit status is the number of failed checks.
 set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${S31_WORK:-$(dirname -- "$repo")}
-usage="usage: $0 <board-ip> <fleet-name> [--cloud] [--fresh] [--reset <port> <mac>]"
+usage="usage: $0 <board-ip> <fleet-name> [--cloud] [--fresh] [--console|--reset <port> <mac>]"
 ip=${1:?$usage}
 fleet=${2:?$usage}
 shift 2
@@ -42,17 +50,19 @@ cloud=0
 fresh=0
 reset_port=
 reset_mac=
+console=0
 while [ $# -gt 0 ]; do
 	case $1 in
 	--cloud) cloud=1; shift ;;
 	--fresh) fresh=1; shift ;;
 	--reset) reset_port=${2:?--reset <port> <mac>}; reset_mac=${3:?--reset <port> <mac>}; shift 3 ;;
+	--console) console=1; reset_port=${2:?--console <port> <mac>}; reset_mac=${3:?--console <port> <mac>}; shift 3 ;;
 	*) echo "unknown option $1" >&2; exit 2 ;;
 	esac
 done
 if [ -n "$reset_port" ] && [ "$cloud" != 1 ]; then
 	# The reset check expects the cloud-deployed demo to come back.
-	echo "--reset needs --cloud" >&2
+	echo "--reset and --console need --cloud" >&2
 	exit 2
 fi
 
@@ -99,14 +109,42 @@ since() { log "${1##*-}" | sed -n "/$1/,\$p"; }
 mark() { m="board-test-$$-$(date +%s)"; logger -t board-test "$m"; echo "$m"; }
 '
 
-# A board that goes away mid-command fails the command within ~30 s instead
-# of leaving the session waiting for TCP to time out.
-board() {
-	ssh -i "$key" -o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
-		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-		-o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
-		-o BatchMode=yes "root@$ip" "$prelude" "$@"
-}
+# Exit status 255: the command could not be run (as ssh(1) reports it).
+if [ "$console" = 1 ]; then
+	tmp=$(mktemp -d)
+	sock=$tmp/console.sock
+	mkdir -p "$work/out"
+	console_log=$work/out/console-$(date +%Y%m%d-%H%M%S).log
+	ESP_ESPTOOL=${ESP_ESPTOOL:-esptool} "${PYTHON:-python3}" \
+		"$repo/development_tools/board-console.py" serve \
+		--port "$reset_port" --mac "$reset_mac" --socket "$sock" \
+		--log "$console_log" &
+	console_pid=$!
+	trap 'kill $console_pid 2>/dev/null; rm -rf "$tmp"' EXIT
+	trap 'exit 130' INT TERM
+	for i in $(seq 1 60); do
+		[ -S "$sock" ] && break
+		kill -0 $console_pid 2>/dev/null || exit 1
+		sleep 1
+	done
+	echo "console log: $console_log" >&2
+	console() {
+		op=$1
+		shift
+		"${PYTHON:-python3}" "$repo/development_tools/board-console.py" \
+			"$op" --socket "$sock" "$@"
+	}
+	board() { console run --prelude "$prelude" -- "$@"; }
+else
+	# A board that goes away mid-command fails the command within ~30 s
+	# instead of leaving the session waiting for TCP to time out.
+	board() {
+		ssh -i "$key" -o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
+			-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+			-o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+			-o BatchMode=yes "root@$ip" "$prelude" "$@"
+	}
+fi
 check() {
 	name=$1
 	shift
@@ -382,9 +420,10 @@ device_registered() {
 			--query 'length(principals)' --output text)" -ge 1 ]
 }
 
-# Waits for SSH, for at least 5 minutes: under systemd the board answers
-# 2 to 2.5 minutes after a reset.
-wait_for_ssh() {
+# Waits for the board to run a command, for at least 5 minutes: under
+# systemd the board answers 2 to 2.5 minutes after a reset. (On the console,
+# each attempt itself waits up to 15 minutes for a shell.)
+wait_for_board() {
 	for i in $(seq 1 150); do
 		board true 2>/dev/null && return 0
 		sleep 2
@@ -392,13 +431,17 @@ wait_for_ssh() {
 	return 1
 }
 
-# Resets the board through its serial port and waits for SSH.
+# Resets the board through its serial port and waits for it.
 cold_reset() {
+	if [ "$console" = 1 ]; then
+		console reset && wait_for_board
+		return
+	fi
 	esptool=${ESP_ESPTOOL:-esptool}
 	mac=$("$esptool" --port "$reset_port" read-mac 2>&1 |
 		sed -n 's/^MAC: *//p' | head -n 1 | tr '[:upper:]' '[:lower:]')
 	[ "$mac" = "$(printf '%s' "$reset_mac" | tr '[:upper:]' '[:lower:]')" ] || return 1
-	wait_for_ssh
+	wait_for_board
 }
 
 # Persistent storage: the same device comes back, with what was deployed.
@@ -424,7 +467,7 @@ fresh_after_reset() {
 }
 
 # The board may still be booting, from a flash or a reset just before.
-wait_for_ssh || { echo "no SSH from root@$ip" >&2; exit 1; }
+wait_for_board || { echo "no answer from the board" >&2; exit 1; }
 
 # Recipes handed to ggl-cli -r are copied with their mode; recipe-runner
 # runs as gg_component and must be able to read them (hence umask 022
@@ -450,7 +493,7 @@ fact() {
 	return 255
 }
 unreachable() {
-	echo "no answer from root@$ip; stopping after $failures failed check(s)" >&2
+	echo "no answer from the board; stopping after $failures failed check(s)" >&2
 	exit 1
 }
 image_kit=$(fact 'test -d /etc/greengrass/connection-kit && echo 1 || echo 0') ||

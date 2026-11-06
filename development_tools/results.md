@@ -207,7 +207,11 @@ transfer stopped"); the UART read that range (0.6 Mbit/s).
 - Buildroot's glibc package downloads its complete git history unless
   `BR2_PRIMARY_SITE` (Buildroot's source mirror) is tried first.
 - The Function-CoreBoard's CP2102N resets the board whenever its port is
-  opened, regardless of DTR/RTS; use SSH for repeated inspection.
+  opened, regardless of DTR/RTS: keep one session open
+  (`board-console.py`). Its console pads output with NUL bytes, also
+  inside the shell's echo, and the shell's line editor echoes typed input
+  at about 200 bytes/s, so scripts go to the board base64-encoded with the
+  terminal's echo off.
 - **The workstation must stay on the board's network**: when its Wi-Fi
   adapter moved to another network, the board stopped at "VFS: Unable to
   mount root fs via NFS".
