@@ -16,6 +16,28 @@ PSRAM), 2026-11-04..05, kernel `1962979` with one core:
 The main configuration, under systemd on the same board with 32 MiB,
 passed 5 of 14 (`results.md`).
 
+A fresh-clone build (2026-11-06, the same root file system, 16 MiB device
+tree) did worse on the same board:
+
+| State (`/var/lib`) | End-to-end test |
+| --- | --- |
+| persistent (NFS) | 6/14, then 8/14 |
+| RAM (`--fresh`) | 9/12 |
+
+- On NFS, the deployments failed because `ggconfigd` answered after
+  Greengrass's 10 s core-bus timeout ("Failed to send default config to
+  ggconfigd"). In the second run, the first check also failed on test
+  components the first run had left in the persistent state.
+- In RAM, two local deployments failed because ggl-svc's `systemctl` gave
+  up after its 10 s timeout ("cannot reach ggl-svcd") while `ggl-svcd` was
+  busy; systemd's `systemctl` waits 25 s. The check after a cold reset also
+  failed; its cause was not determined.
+
+MemAvailable after boot was the same as on 2026-11-04 (5.4 vs 5.6 MiB).
+Why `ggconfigd` and `ggl-svcd` answered more slowly than two days earlier
+was not established: with 1 MiB of real margin, the outcome varies with
+load.
+
 ## First board
 
 Board: ESP32-S31 Function-CoreBoard (chip MAC 30:ed:a0:ed:78:74), 16 MiB
