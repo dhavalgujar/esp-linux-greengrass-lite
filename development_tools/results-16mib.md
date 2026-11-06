@@ -23,6 +23,7 @@ tree) did worse on the same board:
 | --- | --- |
 | persistent (NFS) | 6/14, then 8/14 |
 | RAM (`--fresh`) | 9/12 |
+| RAM, commands in the serial console (`--fresh --console`) | 12/12 |
 
 - On NFS, the deployments failed because `ggconfigd` answered after
   Greengrass's 10 s core-bus timeout ("Failed to send default config to
@@ -32,6 +33,11 @@ tree) did worse on the same board:
   up after its 10 s timeout ("cannot reach ggl-svcd") while `ggl-svcd` was
   busy; systemd's `systemctl` waits 25 s. The check after a cold reset also
   failed; its cause was not determined.
+
+- Over the serial console instead of SSH (one run, the same day and
+  image): every check passed in about 11 minutes, with 33 commands and the
+  cold reset going through the console. One run does not show that SSH
+  caused the failures above.
 
 MemAvailable after boot was the same as on 2026-11-04 (5.4 vs 5.6 MiB).
 Why `ggconfigd` and `ggl-svcd` answered more slowly than two days earlier
