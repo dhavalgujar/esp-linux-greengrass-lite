@@ -437,12 +437,30 @@ for leftover in com.espressif.esp32s31.FailTest com.espressif.esp32s31.PhaseTest
 done
 
 check "device has its identity, core units active" provisioned_and_running
-image_kit=$(board 'test -d /etc/greengrass/connection-kit && echo 1 || echo 0')
+# Facts every later check depends on. A busy board can miss SSH's connect
+# timeout, and a guessed answer would fail all of them, so these are retried
+# and the test stops if the board does not answer.
+fact() {
+	for i in 1 2 3 4 5 6; do
+		out=$(board "$1")
+		status=$?
+		[ "$status" = 255 ] || { printf '%s\n' "$out"; return "$status"; }
+		sleep 10
+	done
+	return 255
+}
+unreachable() {
+	echo "no answer from root@$ip; stopping after $failures failed check(s)" >&2
+	exit 1
+}
+image_kit=$(fact 'test -d /etc/greengrass/connection-kit && echo 1 || echo 0') ||
+	unreachable
 # The Thing: the connection kit's, or <fleet>-<serial> from provisioning.
-thing=$(board 'sed -n "s/^ *thingName: *\"\(.*\)\"/\1/p" \
-	/var/lib/greengrass/config.d/connection-kit.yaml 2>/dev/null')
+thing=$(fact 'f=/var/lib/greengrass/config.d/connection-kit.yaml
+	[ ! -f "$f" ] || sed -n "s/^ *thingName: *\"\(.*\)\"/\1/p" "$f"') ||
+	unreachable
 if [ -z "$thing" ]; then
-	serial=$(board 'tr -d ":\n" </sys/class/net/eth0/address')
+	serial=$(fact 'tr -d ":\n" </sys/class/net/eth0/address') || unreachable
 	thing=${serial:+$fleet-$serial}
 fi
 if [ "$cloud" = 1 ]; then
