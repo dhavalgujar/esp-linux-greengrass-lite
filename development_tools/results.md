@@ -54,6 +54,17 @@ log reading was made cheaper, 2026-11-04) passed 11 of 13 checks: the
 outcome varies with load. On the same board and network, the systemd-free
 configuration of the 16 MiB branch passed 14/14 with 32 MiB.
 
+A fresh-clone build of this configuration (2026-11-06) did worse. The
+board test could not use the board: one run was started before the board
+had booted (the test now waits for SSH), and in the next, SSH timed out
+during the key exchange throughout, so the test got no Thing name and
+every check after it failed (it now retries, then stops). Watched from a
+cold boot for 20 minutes while a cloud deployment of the demo arrived, the
+board answered each SSH command after 30 to 90 s, its load average stayed
+between 4 and 5.5, it re-read 62,912 file pages with MemAvailable at 10 to
+12 MiB, and the deployment FAILED. It was idle for 7 % of the 28 minutes
+since boot.
+
 ### Boot
 
 | | |

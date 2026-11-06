@@ -94,7 +94,9 @@ Both Greengrass Lite patches are candidates for upstream.
   core-bus and 25 s D-Bus timeouts fire, and the deployment is reported
   FAILED. In the full end-to-end test, 5 of 14 checks passed
   (`development_tools/results.md`); revising a failed deployment retries
-  it. MemAvailable is about 13 MiB after boot, but a deployment uses most
+  it. With a fresh build, a cloud deployment left the board answering SSH
+  only after 30 to 90 s for the 20 minutes it was watched, and FAILED.
+  MemAvailable is about 13 MiB after boot, but a deployment uses most
   of it, and code is read again over the network throughout: keep
   components small (`development_tools/memory-margin.sh` measures what is
   left). The systemd-free configuration on the 16 MiB branch passed the
