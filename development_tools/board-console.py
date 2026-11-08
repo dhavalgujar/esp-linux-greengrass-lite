@@ -82,6 +82,7 @@ class Console:
         self.can_type = False  # Linux is past U-Boot
         self.ready = False     # a shell answered since the last reset
         self.panic = None      # the kernel's panic line, until a reset
+        self.boot_at = self.rx_at = time.monotonic()
         self.preludes = set()  # uploaded since the last reset
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -92,6 +93,7 @@ class Console:
             data = self.ser.read(4096)
             if not data:
                 continue
+            self.rx_at = time.monotonic()
             self.log.write(data)
             self.log.flush()
             # The console pads its output with NUL bytes, also inside the
@@ -114,6 +116,7 @@ class Console:
 
     def _on_line(self, line):
         if BOOT in line:
+            self.boot_at = time.monotonic()
             self.boots += 1
             self.can_type = self.ready = False
             self.panic = None
@@ -187,6 +190,7 @@ class Console:
                 raise NotReady("no shell on the console")
             if not can_type:
                 self._resume_uboot()
+                self._unstall_boot()
                 time.sleep(1)
                 continue
             try:
@@ -226,6 +230,21 @@ class Console:
                 self.note("U-Boot stopped its autoboot; typing boot")
                 self.ser.write(b"boot\r")
                 self.ser.flush()
+
+    def _unstall_boot(self):
+        # A boot that went quiet before the kernel (seen once: U-Boot SPL
+        # hung after switching the flash to QIO) is reset.
+        now = time.monotonic()
+        with self.cv:
+            stalled = (self.boots > 0 and not self.can_type and
+                       not self.panic and now - self.boot_at > 90 and
+                       now - self.rx_at > 30)
+            text = bytes(self.buf[-200:])
+        if stalled and not text.rstrip().endswith(b"=>"):
+            last = text.rstrip().rsplit(b"\n", 1)[-1].strip()
+            self.note(f"the boot stalled after "
+                      f"{last.decode(errors='replace')!r}; resetting")
+            self.reset()
 
     # Scripts reach the board through this helper, uploaded once per boot:
     # it reads them from the terminal with its echo off. The shell's line
@@ -321,20 +340,21 @@ rm -f "$f" "$f.e"
             err = rest.rpartition(f"\n__BC_{tag}_R ".encode())[0]
             return int(m.group(1)), out, err
 
+    # Not serialized with commands: a command in progress fails (the board
+    # reset), and a wait for a shell goes on with the new boot.
     def reset(self):
-        with self.op:
-            with self.cv:
-                boots = self.boots
-                self.can_type = self.ready = False
-            self.note("reset through RTS")
-            self.ser.rts = True
-            time.sleep(0.1)
-            self.ser.rts = False
-            with self.cv:
-                deadline = time.monotonic() + 10
-                while self.boots == boots and time.monotonic() < deadline:
-                    self.cv.wait(1)
-                return self.boots != boots
+        with self.cv:
+            boots = self.boots
+            self.can_type = self.ready = False
+        self.note("reset through RTS")
+        self.ser.rts = True
+        time.sleep(0.1)
+        self.ser.rts = False
+        with self.cv:
+            deadline = time.monotonic() + 10
+            while self.boots == boots and time.monotonic() < deadline:
+                self.cv.wait(1)
+            return self.boots != boots
 
 
 def clean(text):
