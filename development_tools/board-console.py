@@ -57,7 +57,11 @@ GOING_DOWN = (b"reboot: Restarting system", b"reboot: Power down",
               b"reboot: System halted")
 PANIC = b"Kernel panic - not syncing"
 KERNEL_LINE = re.compile(rb"\[ *\d+\.\d{6}\] ")
-STATUS_LINE = re.compile(rb"^\[ *(OK|FAILED|DEPEND|TIME|\*+) *\] ")
+# systemd's status lines, while it boots or shuts down, once colors are off
+STATUS_LINE = re.compile(rb"^(\[ *(OK|FAILED|DEPEND|TIME|\*+) *\] | {9}"
+                         rb"(Starting|Stopping|Mounting|Unmounting|"
+                         rb"Activating|Deactivating|Reloading) )")
+COLOR = re.compile(rb"\x1b\[[0-9;]*m")
 BUF_MAX = 8 << 20
 
 
@@ -366,7 +370,7 @@ def clean(text):
         if m:
             carry += line[:m.start()]
             continue
-        if STATUS_LINE.match(line):
+        if STATUS_LINE.match(COLOR.sub(b"", line)):
             continue
         lines.append(carry + line)
         carry = b""

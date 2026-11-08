@@ -105,6 +105,12 @@ library, D-Bus, Greengrass) no longer fits in what is left. The systemd-free
 configuration, on the same board: 37 s and 21 s, nothing re-read, 12 MiB
 of real margin.
 
+Again over the serial console (2026-11-08), on the state the 2-hour board
+test above left behind (the demo deployed, AnonPages 10.7 MiB instead of
+8.5): the deployment FAILED after 558 s and its removal took 3128 s,
+re-reading 571,011 file pages; MemAvailable fell from 11.8 to 2.2 MiB. Not
+a like-for-like comparison with the run before, but no better.
+
 ### The July 2026 proof
 
 The same stack (systemd 256.7, glibc, NFS root, Greengrass Lite 2.6.0)
