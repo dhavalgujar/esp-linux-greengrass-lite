@@ -25,6 +25,7 @@ tree) did worse on the same board:
 | RAM (`--fresh`) | 9/12 |
 | RAM, commands in the serial console (`--fresh --console`) | 12/12 |
 | persistent (NFS), commands in the serial console (`--console`, 2026-11-08) | 14/14 |
+| the same, with patch 0009 (ggl-svc's 25 s client timeout) | 14/14 |
 
 - On NFS, the deployments failed because `ggconfigd` answered after
   Greengrass's 10 s core-bus timeout ("Failed to send default config to
@@ -32,8 +33,9 @@ tree) did worse on the same board:
   components the first run had left in the persistent state.
 - In RAM, two local deployments failed because ggl-svc's `systemctl` gave
   up after its 10 s timeout ("cannot reach ggl-svcd") while `ggl-svcd` was
-  busy; systemd's `systemctl` waits 25 s. The check after a cold reset also
-  failed; its cause was not determined.
+  busy; systemd's `systemctl` waits 25 s, and so does ggl-svc's since
+  patch 0009 (also honouring `$SYSTEMD_BUS_TIMEOUT`). The check after a
+  cold reset also failed; its cause was not determined.
 
 - Over the serial console instead of SSH (one run each, the same image):
   every check passed, in RAM (2026-11-06, about 11 minutes) and on NFS
@@ -311,7 +313,8 @@ A second independent review, of the result, found:
 - **A local user could fill the control socket's 8 connection slots**,
   and clients had no timeouts, so `whois` from ggipcd could hang. Now
   there are 16 slots, at most 4 per non-root user, and 10 s client
-  timeouts.
+  timeouts (25 s since patch 0009, as systemctl waits for systemd, or
+  `$SYSTEMD_BUS_TIMEOUT`).
 - **Notifications were applied to every unit type**, letting a `Type=exec`
   component be marked STOPPING. Now only `Type=notify` units accept them,
   per `NotifyAccess`, as under systemd.

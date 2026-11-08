@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Tue, 3 Nov 2026 04:03:40 +0530
-Subject: [PATCH 4/8] Retry HTTP requests when the host name does not resolve
+Subject: [PATCH 4/9] Retry HTTP requests when the host name does not resolve
 
 ggl-http retries timeouts and failed connections, but not a host name
 that fails to resolve, so one slow answer from the name server fails the

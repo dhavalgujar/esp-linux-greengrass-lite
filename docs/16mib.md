@@ -28,7 +28,7 @@ supports AWS IoT fleet provisioning (`scripts/aws-provision.sh <fleet>`,
 provisions a new certificate (`development_tools/aws-clean-certs.sh`
 removes the old ones). Measurements: `development_tools/results-16mib.md`.
 
-Besides ggl-svc (patches 0005 to 0008), this configuration carries two
+Besides ggl-svc (patches 0005 to 0009), this configuration carries two
 fixes for failures the main configuration documents as known issues:
 patch 0003 retries the fleet provisioning certificate request until the
 TLS connection is up, and patch 0004 retries HTTP requests whose host name

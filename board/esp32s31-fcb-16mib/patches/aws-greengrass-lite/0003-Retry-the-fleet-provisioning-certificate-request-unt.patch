@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Fri, 30 Oct 2026 01:37:59 +0530
-Subject: [PATCH 3/8] Retry the fleet provisioning certificate request until
+Subject: [PATCH 3/9] Retry the fleet provisioning certificate request until
  connected
 
 fleet-provisioning starts iotcored, waits 5 seconds and then sends the

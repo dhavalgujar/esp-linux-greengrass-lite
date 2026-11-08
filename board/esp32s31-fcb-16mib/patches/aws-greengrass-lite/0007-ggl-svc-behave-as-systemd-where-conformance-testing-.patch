@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Fri, 30 Oct 2026 02:37:47 +0530
-Subject: [PATCH 7/8] ggl-svc: behave as systemd where conformance testing
+Subject: [PATCH 7/9] ggl-svc: behave as systemd where conformance testing
  found it did not
 
 Running the same units under systemd 255 and under ggl-svcd and

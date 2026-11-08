@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Thu, 29 Oct 2026 04:29:41 +0530
-Subject: [PATCH 6/8] Add ggl-svc, a service manager for builds without systemd
+Subject: [PATCH 6/9] Add ggl-svc, a service manager for builds without systemd
 
 ggl-svcd runs the core daemons and the units ggdeploymentd generates for
 components. It implements the subset of systemd unit semantics they use:

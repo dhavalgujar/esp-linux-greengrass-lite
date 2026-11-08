@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dhaval Gujar <dhaval.gujar@espressif.com>
 Date: Tue, 3 Nov 2026 01:55:15 +0530
-Subject: [PATCH 8/8] ggl-svc: harden against the findings of a security review
+Subject: [PATCH 8/9] ggl-svc: harden against the findings of a security review
 
 An independent review of ggl-svc as a security boundary (a malicious
 component, a compromised ggcore daemon, any local user) found:
