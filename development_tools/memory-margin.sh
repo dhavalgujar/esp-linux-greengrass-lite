@@ -3,10 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # How much memory a running board can really spare:
 #
-#   development_tools/memory-margin.sh <board-ip> [<max-MiB> [<first-MiB>]]
+#   development_tools/memory-margin.sh <board-ip> | --console <port> <mac>
+#                                      [<max-MiB> [<first-MiB>]]
 #                                      (default: from 0 to 6 MiB)
 #
+# With --console the script runs in the board's serial console
+# (development_tools/board-console.py, after checking the chip MAC), with
+# no SSH session taking memory on the board; opening the port resets the
+# board, which gives the fresh boot this needs; the steps start 7 minutes
+# after the boot, once Greengrass has started (under systemd it takes about
+# 6). The console stream is kept in $S31_WORK/out/console-<date>.log.
+#
 #   S31_WORK      work area holding secrets/ssh (default: repo/..)
+#   ESP_ESPTOOL   esptool for --console (default: from PATH)
+#   PYTHON        Python with pyserial, for --console (default: python3)
 #
 # MemAvailable counts page cache that holds program code, which the board
 # needs again. This takes memory away with an unswappable tmpfs balloon,
@@ -19,17 +29,22 @@
 # board unresponsive for a while.
 set -eu
 
-ip=${1:?usage: $0 <board-ip> [<max-MiB> [<first-MiB>]]}
-max=${2:-6}
-first=${3:-0}
+usage="usage: $0 <board-ip> | --console <port> <mac> [<max-MiB> [<first-MiB>]]"
+port=
+if [ "${1:?$usage}" = --console ]; then
+	port=${2:?$usage}
+	mac=${3:?$usage}
+	shift 3
+else
+	ip=$1
+	shift
+fi
+max=${1:-6}
+first=${2:-0}
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${S31_WORK:-$(dirname -- "$repo")}
 
-ssh -i "$work/secrets/ssh/id_ed25519" \
-	-o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
-	-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-	-o ServerAliveInterval=15 -o ServerAliveCountMax=80 \
-	-o BatchMode=yes "root@$ip" "MAX=$max FIRST=$first sh -s" <<'EOF'
+script=$(cat <<'EOF'
 R=/tmp/margin-recipe
 B=/tmp/margin-balloon
 mkdir -p $R $B
@@ -127,3 +142,23 @@ if ls /var/lib/greengrass/packages/recipes | grep -q "^com.example.Balloon-"; th
 fi
 rm -rf $R $B
 EOF
+)
+
+if [ -n "$port" ]; then
+	mkdir -p "$work/out"
+	log=$work/out/console-$(date +%Y%m%d-%H%M%S).log
+	echo "console log: $log" >&2
+	printf 'MAX=%s FIRST=%s\n%s\n%s\n' "$max" "$first" \
+		'while [ "$(cut -d. -f1 /proc/uptime)" -lt 420 ]; do sleep 5; done' \
+		"$script" |
+		ESP_ESPTOOL=${ESP_ESPTOOL:-esptool} "${PYTHON:-python3}" \
+		"$repo/development_tools/board-console.py" once --port "$port" \
+		--mac "$mac" --log "$log" --timeout 7200 -- -
+else
+	printf '%s\n' "$script" |
+		ssh -i "$work/secrets/ssh/id_ed25519" \
+		-o UserKnownHostsFile="$work/secrets/ssh/known_hosts" \
+		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+		-o ServerAliveInterval=15 -o ServerAliveCountMax=80 \
+		-o BatchMode=yes "root@$ip" "MAX=$max FIRST=$first sh -s"
+fi

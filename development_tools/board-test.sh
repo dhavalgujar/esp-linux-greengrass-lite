@@ -421,9 +421,14 @@ device_registered() {
 }
 
 # Waits for the board to run a command, for at least 5 minutes: under
-# systemd the board answers 2 to 2.5 minutes after a reset. (On the console,
-# each attempt itself waits up to 15 minutes for a shell.)
+# systemd the board answers 2 to 2.5 minutes after a reset. On the console
+# one attempt does: it waits up to 15 minutes for a shell, and fails at once
+# on a kernel panic.
 wait_for_board() {
+	if [ "$console" = 1 ]; then
+		board true
+		return
+	fi
 	for i in $(seq 1 150); do
 		board true 2>/dev/null && return 0
 		sleep 2

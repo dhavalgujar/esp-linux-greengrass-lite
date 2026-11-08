@@ -7,6 +7,7 @@
   board-console.py run --socket SOCK [--prelude TEXT] [--timeout S] -- WORD...
   board-console.py reset --socket SOCK
   board-console.py stop --socket SOCK
+  board-console.py once --port PORT --mac MAC [--log FILE] -- WORD...|-
 
 The Function-CoreBoard's CP2102N resets the board whenever its port is
 opened, so one server holds the port for a whole session and types each
@@ -32,6 +33,9 @@ which the command is interrupted). Kernel and systemd status lines that
 land on the console during a command are removed from its output.
 
 `reset` resets the board through RTS (the chip's EN), as esptool does.
+
+`once` opens the port (resetting the board), runs one script as `run`
+does (from standard input with "-"), and closes the port.
 """
 import argparse
 import base64
@@ -51,6 +55,7 @@ BOOT = b"ESP-ROM:"
 KERNEL = b"Starting kernel"
 GOING_DOWN = (b"reboot: Restarting system", b"reboot: Power down",
               b"reboot: System halted")
+PANIC = b"Kernel panic - not syncing"
 KERNEL_LINE = re.compile(rb"\[ *\d+\.\d{6}\] ")
 STATUS_LINE = re.compile(rb"^\[ *(OK|FAILED|DEPEND|TIME|\*+) *\] ")
 BUF_MAX = 8 << 20
@@ -76,6 +81,7 @@ class Console:
         self.boots = 0         # resets seen on the console
         self.can_type = False  # Linux is past U-Boot
         self.ready = False     # a shell answered since the last reset
+        self.panic = None      # the kernel's panic line, until a reset
         self.preludes = set()  # uploaded since the last reset
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -110,7 +116,11 @@ class Console:
         if BOOT in line:
             self.boots += 1
             self.can_type = self.ready = False
+            self.panic = None
             self.preludes.clear()
+        elif PANIC in line:
+            self.can_type = self.ready = False
+            self.panic = line.decode(errors="replace").strip()
         elif KERNEL in line:
             self.can_type = True
         elif any(m in line for m in GOING_DOWN):
@@ -170,9 +180,11 @@ class Console:
             with self.cv:
                 if self.ready:
                     return
+                if self.panic:
+                    raise NotReady(self.panic)
                 can_type, boots = self.can_type, self.boots
             if time.monotonic() > deadline:
-                raise NotReady()
+                raise NotReady("no shell on the console")
             if not can_type:
                 self._resume_uboot()
                 time.sleep(1)
@@ -267,8 +279,8 @@ rm -f "$f" "$f.e"
         with self.op:
             try:
                 self.ensure_ready(ready_timeout)
-            except NotReady:
-                return 255, b"", b"board-console: no shell on the console\n"
+            except NotReady as e:
+                return 255, b"", f"board-console: {e}\n".encode()
             boots = self.boots
             tag = uuid.uuid4().hex[:12]
             try:
@@ -343,7 +355,7 @@ def clean(text):
     return b"\n".join(lines)
 
 
-def serve(args):
+def open_console(args):
     esptool = os.environ.get("ESP_ESPTOOL", "esptool")
     out = subprocess.run([esptool, "--port", args.port, "read-mac"],
                          capture_output=True, text=True).stdout
@@ -368,7 +380,11 @@ def serve(args):
             con.can_type = True
     if con.boots == 0:
         con.note("no reset seen on opening the port")
+    return ser, con
 
+
+def serve(args):
+    ser, con = open_console(args)
     stop = threading.Event()
 
     class Handler(socketserver.StreamRequestHandler):
@@ -432,11 +448,28 @@ def main():
     p.add_argument("words", nargs="+")
     for name in ("reset", "stop"):
         sub.add_parser(name).add_argument("--socket", required=True)
+    p = sub.add_parser("once")
+    p.add_argument("--port", required=True)
+    p.add_argument("--mac", required=True)
+    p.add_argument("--log")
+    p.add_argument("--timeout", type=float, default=1200)
+    p.add_argument("--ready-timeout", type=float, default=900)
+    p.add_argument("words", nargs="+")
     args = ap.parse_args()
 
     if args.cmd == "serve":
         serve(args)
         return 0
+    if args.cmd == "once":
+        script = sys.stdin.read() if args.words == ["-"] else \
+            " ".join(args.words)
+        ser, con = open_console(args)
+        rc, out, err = con.run(script, None, args.timeout,
+                               args.ready_timeout)
+        sys.stdout.buffer.write(out)
+        sys.stderr.buffer.write(err)
+        ser.close()
+        return rc
     if args.cmd == "run":
         resp = call(args.socket, {
             "op": "run", "script": " ".join(args.words),
