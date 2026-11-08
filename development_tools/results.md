@@ -65,6 +65,14 @@ between 4 and 5.5, it re-read 62,912 file pages with MemAvailable at 10 to
 12 MiB, and the deployment FAILED. It was idle for 7 % of the 28 minutes
 since boot.
 
+Run again with the board commands in the serial console instead of SSH
+(`--console`, 2026-11-08, clean persistent state): 6 of 14 passed, in
+about 2 hours. Three board commands did not finish within 20 minutes, the
+core bus's 10 s timeout fired 11 times, and the deployments failed as
+before: the console does not change the outcome, the board does not keep
+up. The first boot after the flash also hung once in U-Boot SPL, right
+after it switched the flash to QIO (the console now resets such a boot).
+
 ### Boot
 
 | | |
