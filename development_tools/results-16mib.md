@@ -24,6 +24,7 @@ tree) did worse on the same board:
 | persistent (NFS) | 6/14, then 8/14 |
 | RAM (`--fresh`) | 9/12 |
 | RAM, commands in the serial console (`--fresh --console`) | 12/12 |
+| persistent (NFS), commands in the serial console (`--console`, 2026-11-08) | 14/14 |
 
 - On NFS, the deployments failed because `ggconfigd` answered after
   Greengrass's 10 s core-bus timeout ("Failed to send default config to
@@ -34,10 +35,21 @@ tree) did worse on the same board:
   busy; systemd's `systemctl` waits 25 s. The check after a cold reset also
   failed; its cause was not determined.
 
-- Over the serial console instead of SSH (one run, the same day and
-  image): every check passed in about 11 minutes, with 33 commands and the
-  cold reset going through the console. One run does not show that SSH
-  caused the failures above.
+- Over the serial console instead of SSH (one run each, the same image):
+  every check passed, in RAM (2026-11-06, about 11 minutes) and on NFS
+  (2026-11-08, about 9.5 minutes, the bootstrap reboot and the cold reset
+  included). One run each does not prove that SSH caused the failures
+  above, but an SSH session does take memory the board does not have:
+  `memory-margin.sh --console` on the same day, against the same image over
+  SSH on 2026-11-04:
+
+  | Taken | Re-read pages, console / SSH | Deploy, remove: console | SSH |
+  | ---: | ---: | --- | --- |
+  | 0 MiB | 3,167 / 4,311 | 42 s, 38 s | 47 s, 41 s |
+  | 1 MiB | 9,088 / 18,711 | 64 s, 49 s | 92 s, 77 s |
+  | 2 MiB | 41,678 / 83,484 | FAILED after 172 s | FAILED after 404 s |
+
+  The real margin is still about 1 MiB.
 
 MemAvailable after boot was the same as on 2026-11-04 (5.4 vs 5.6 MiB).
 Why `ggconfigd` and `ggl-svcd` answered more slowly than two days earlier
